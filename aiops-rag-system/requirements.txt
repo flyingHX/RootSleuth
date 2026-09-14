@@ -5,12 +5,12 @@ pydantic>=2.6.0
 python-dotenv>=1.0.0
 httpx>=0.27.0
 
-# ===== LangChain 架构 =====
-langchain>=0.2.0
-langchain-core>=0.2.0
-langchain-openai>=0.1.0
-langchain-community>=0.2.0
-langchain-milvus>=0.1.0
+# ===== LangChain 架构（LCEL / BaseRetriever / BaseDocumentCompressor）=====
+langchain>=0.3.20,<0.4
+langchain-core>=0.3.20,<0.4
+langchain-openai>=0.3,<0.4
+langchain-community>=0.3.20,<0.4
+langchain-milvus>=0.1,<0.4
 
 # ===== 中间件 =====
 pymilvus>=2.4.0

@@ -13,6 +13,8 @@ PIPELINE_CONFIG = {
     "top_k": 20,
     "final_k": 3,
     "llm_timeout": 1,
+    # L4 独立超时调短：离线测试环境中 LLM 不可达时快速降级，避免拖慢用例
+    "rerank": {"final_k": 3, "l2_top_k": 10, "l3_enabled": False, "l4_timeout": 0.5},
 }
 
 

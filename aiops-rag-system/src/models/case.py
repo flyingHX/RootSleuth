@@ -1,5 +1,5 @@
 """知识案例模型（Milvus aiops_knowledge_base 集合的字段映射）。"""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional, Dict, List
 
 
@@ -12,6 +12,11 @@ class KnowledgeCase(BaseModel):
     severity: int = 2
     start_time: int = 0
     feedback_score: int = 0
+    # 反馈闭环拆分字段：f4 贝叶斯平滑（upvotes/downvotes）、f7 命中频率（hit/recall）的数据基础
+    upvotes: int = 0
+    downvotes: int = 0
+    hit_count: int = 0
+    recall_count: int = 0
     root_cause: str = ""
     solution: str = ""
     alert_template: str = ""
@@ -22,8 +27,10 @@ class KnowledgeCase(BaseModel):
 
     def topology_dict(self) -> Dict[str, List[str]]:
         import json
+
         try:
-            return json.loads(self.topology_snapshot)
+            data = json.loads(self.topology_snapshot)
+            return data if isinstance(data, dict) else {"upstream": [], "downstream": []}
         except (json.JSONDecodeError, TypeError):
             return {"upstream": [], "downstream": []}
 
@@ -37,6 +44,10 @@ class KnowledgeCase(BaseModel):
             "severity": self.severity,
             "start_time": self.start_time,
             "feedback_score": self.feedback_score,
+            "upvotes": self.upvotes,
+            "downvotes": self.downvotes,
+            "hit_count": self.hit_count,
+            "recall_count": self.recall_count,
             "root_cause": self.root_cause[:2048],
             "solution": self.solution[:2048],
             "alert_template": self.alert_template[:1024],

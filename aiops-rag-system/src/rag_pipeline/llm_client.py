@@ -39,6 +39,10 @@ class LLMClient:
             self._llm = ChatOpenAI(**kwargs)
         return self._llm
 
+    def get_chat_model(self) -> ChatOpenAI:
+        """暴露底层 ChatOpenAI 实例（供 L4 Listwise LCEL 链复用，避免重复建连）。"""
+        return self._get_llm()
+
     def invoke(self, prompt: str) -> str:
         """调用 LLM，返回原始文本（上层解析 JSON，失败时降级）。"""
         response = self._get_llm().invoke([HumanMessage(content=prompt)])

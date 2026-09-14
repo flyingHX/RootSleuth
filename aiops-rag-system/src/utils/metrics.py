@@ -39,3 +39,17 @@ rag_embed_circuit_open_total = Counter(
 
 # 去重指标
 dedup_reduction_rate = Gauge("dedup_reduction_rate", "Alert reduction rate by dedup")
+
+# ===== 四层业务重排指标（L1~L4 分层可观测）=====
+rerank_layer_latency = Histogram(
+    "rerank_layer_latency_seconds",
+    "Rerank layer latency (l1/l2/l3/l4/fusion)",
+    ["layer"],
+    buckets=[0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+)
+rerank_degraded_total = Counter(
+    "rerank_degraded_total", "Rerank layer degradation events", ["layer"]
+)
+rerank_final_total = Counter(
+    "rerank_final_total", "Rerank funnel final output size", ["size"]
+)

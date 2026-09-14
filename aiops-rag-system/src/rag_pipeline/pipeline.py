@@ -1,4 +1,19 @@
-"""RAG 检索流水线核心：四步走（向量构建 -> 粗筛 -> ANN 精筛 -> 业务重排）+ LLM 推理。"""
+"""RAG 检索流水线核心（LangChain 化）：
+
+召回链（LangChain BaseRetriever）：
+  Embedding（BGEEmbedder）-> Milvus 双路召回 Top-20（MilvusEventRetriever）
+四层业务重排（RerankPipeline）：
+  L1 规则硬过滤 -> L2 七特征融合 -> (L3 Cross-Encoder ∥ L4 LLM Listwise) -> Score Fusion -> Top-3
+诊断推理：
+  Few-shot Prompt（prompt_builder）-> LLM（LLMClient，超时/异常熔断快速降级 top1）
+
+P99 长尾治理：
+- 各阶段独立计时：rag_stage_latency_seconds（embedding/milvus_search/rerank/llm）
+  + rerank_layer_latency_seconds（l1/l2/l3/l4/fusion 分层）。
+- 每层重排独立降级（LLM 挂走 L3、Cross-Encoder 挂走 L2），L4 后台线程 + 独立超时。
+- LLM 底层重试默认关闭、线程池大小可配置；超时或异常均快速降级 top1。
+- search() 兼容 dict 事件（Kafka 消费路径）。
+"""
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -7,37 +22,54 @@ from typing import Dict, List, Union
 
 from ..models.event import StandardizedEvent
 from ..utils.logger import get_logger
-from ..utils.metrics import rag_latency, rag_search_total, rag_stage_latency
+from ..utils.metrics import (
+    rag_latency,
+    rag_search_total,
+    rag_stage_latency,
+    rerank_degraded_total,
+    rerank_final_total,
+    rerank_layer_latency,
+)
 from .embedder import BGEEmbedder
 from .llm_client import LLMClient
 from .milvus_client import MilvusClient
 from .prompt_builder import build_prompt
-from .reranker import Reranker
+from .retriever import MilvusEventRetriever
+from .rerank_pipeline import RerankPipeline
 
 logger = get_logger(__name__)
 
+# 召回字段 -> 输出字段（含四层重排所需的反馈/召回统计与新 Schema 字段）
+_OUTPUT_FIELDS = [
+    "case_id", "fingerprint", "service_name", "cluster", "error_type",
+    "severity", "start_time", "feedback_score", "upvotes", "downvotes",
+    "hit_count", "recall_count", "root_cause", "solution", "alert_template",
+    "topology_snapshot", "resolved_by", "created_at",
+]
+
 
 class RAGPipeline:
-    """完整的 RAG 检索推理引擎，目标检索 P99 < 500ms、LLM P99 < 3s。
-
-    P99 长尾治理：
-    - 各阶段（embedding/milvus_search/rerank/llm）独立计时并暴露
-      rag_stage_latency_seconds 指标，支持线上分阶段长尾定位。
-    - LLM 底层重试默认关闭、线程池大小可配置；超时或异常均快速降级 top1，
-      不再丢弃已就绪的检索结果等待完整 LLM timeout。
-    - search() 兼容 dict 事件（Kafka 消费路径），修复属性访问缺陷。
-    """
+    """完整的 RAG 检索推理引擎，目标检索 P99 < 500ms、LLM P99 < 3s。"""
 
     def __init__(self, config: dict):
         self.milvus = MilvusClient(config.get("milvus", {}))
         self.embedder = BGEEmbedder(config.get("embedder", {}))
-        self.reranker = Reranker()
         self.llm = LLMClient(config.get("llm", {}))
         self.top_k = int(config.get("top_k", 20))
         self.final_k = int(config.get("final_k", 3))
         self.timeout_seconds = float(config.get("llm_timeout", 5.0))
         self.llm_max_workers = int(config.get("llm_max_workers", 8))
         self.recent_window_days = int(config.get("recent_window_days", 30))
+        # LangChain 检索链（双路召回包装为 BaseRetriever）
+        self.retriever = MilvusEventRetriever(
+            milvus_client=self.milvus,
+            embedder=self.embedder,
+            top_k=self.top_k,
+            recent_window_days=self.recent_window_days,
+        )
+        # 四层业务重排编排（L1 -> L2 -> (L3 ∥ L4) -> Fusion）
+        self.rerank_pipeline = RerankPipeline(config, llm_client=self.llm)
+        # 兼容旧属性名（测试/外部脚本引用 pipeline.llm.invoke / pipeline.milvus）
         self.executor = ThreadPoolExecutor(
             max_workers=self.llm_max_workers, thread_name_prefix="rag-llm"
         )
@@ -49,41 +81,29 @@ class RAGPipeline:
             if isinstance(event, dict):
                 event = StandardizedEvent(**event)
 
-            # Step 1: 生成查询向量
-            query_text = self._build_query_text(event)
+            # Step 1: 生成查询向量（经 LangChain Embedder 适配器）
             stage = time.perf_counter()
-            query_vector = self.embedder.embed(query_text)
+            query_vector = self.retriever.embed_query_text(self._build_query_text(event))
             rag_stage_latency.labels(stage="embedding").observe(time.perf_counter() - stage)
 
-            # Step 2 + 3: 双路召回（结构化粗筛 + ANN 精筛）
-            expr = self._build_filter_expr(event)
-            partitions = self.milvus.recent_partitions(3)
+            # Step 2 + 3: LangChain Retriever 双路召回（结构化粗筛 + ANN 精筛）
             stage = time.perf_counter()
-            search_results = self.milvus.search(
-                query_vector=query_vector,
-                expr=expr,
-                partition_names=partitions,
-                limit=self.top_k,
-                output_fields=[
-                    "case_id", "root_cause", "solution", "start_time",
-                    "topology_snapshot", "feedback_score", "alert_template",
-                ],
-            )
+            candidate_docs = self.retriever.retrieve_event(event, query_vector)
             rag_stage_latency.labels(stage="milvus_search").observe(time.perf_counter() - stage)
 
-            if not search_results:
+            if not candidate_docs:
                 rag_search_total.labels(status="no_result").inc()
                 return self._finalize(self._fallback_no_result(event), start_time, [])
 
-            # Step 4: 业务重排
+            # Step 4: 四层业务重排（L1 -> L2 -> (L3 ∥ L4) -> Fusion -> Top-3）
             stage = time.perf_counter()
-            reranked = self.reranker.rerank(
-                candidates=search_results,
-                current_topology=event.topology,
-                current_time=event.timestamp,
+            rerank_result = self.rerank_pipeline.rerank(
+                rows=candidate_docs, event=event, now_ms=event.timestamp
             )
-            rag_stage_latency.labels(stage="rerank").observe(time.perf_counter() - stage)
-            top_cases = reranked[: self.final_k]
+            rerank_elapsed = time.perf_counter() - stage
+            rag_stage_latency.labels(stage="rerank").observe(rerank_elapsed)
+            top_cases = rerank_result.cases
+            self._record_rerank_metrics(rerank_result.stats)
 
             # 构建 Few-shot Prompt 并调用 LLM（超时/异常熔断，快速降级 top1）
             prompt = build_prompt(event, top_cases)
@@ -105,7 +125,10 @@ class RAGPipeline:
                 rag_search_total.labels(status="llm_error").inc()
             rag_stage_latency.labels(stage="llm").observe(time.perf_counter() - stage)
 
-            return self._finalize(result, start_time, top_cases)
+            # 知识库召回统计回流：Top-3 进入 LLM 上下文即 recall_count+1
+            self._record_recall_stats(top_cases)
+
+            return self._finalize(result, start_time, top_cases, rerank_result.stats)
         except Exception as exc:  # noqa: BLE001
             logger.error("RAG pipeline error: %s", exc)
             rag_search_total.labels(status="error").inc()
@@ -125,23 +148,53 @@ class RAGPipeline:
             f"【下游依赖】: {event.topology.get('downstream', [])}"
         )
 
-    def _build_filter_expr(self, event: StandardizedEvent) -> str:
-        since = event.timestamp - self.recent_window_days * 24 * 3600 * 1000
-        return (
-            f'service_name == "{event.service_name}" and '
-            f'error_type == "{event.error_type}" and '
-            f"start_time > {since}"
-        )
+    def _record_rerank_metrics(self, stats) -> None:
+        """四层重排分层指标：逐层延迟、降级事件与最终漏斗产出规模。"""
+        for layer, seconds in (
+            ("l3", stats.l3_latency_ms / 1000.0),
+            ("l4", stats.l4_latency_ms / 1000.0),
+        ):
+            if seconds > 0:
+                rerank_layer_latency.labels(layer=layer).observe(seconds)
+        if stats.l1_out < stats.input_count:
+            rerank_layer_latency.labels(layer="l1").observe(0.001)
+        if not stats.l3_available and stats.l3_latency_ms > 0:
+            rerank_degraded_total.labels(layer="l3").inc()
+        if stats.l4_status == "degraded":
+            rerank_degraded_total.labels(layer="l4").inc()
+        rerank_final_total.labels(size=str(stats.final_out)).inc()
 
-    @staticmethod
-    def _finalize(result: Dict, start_time: float, top_cases: List[Dict]) -> Dict:
-        """补齐端到端耗时与相似案例列表（供诊断接口直接返回）。"""
+    def _record_recall_stats(self, top_cases: List[Dict]) -> None:
+        """召回统计异步回流（f7 命中频率特征的数据基础），失败静默。"""
+        case_ids = [str(c.get("case_id", "")) for c in top_cases if c.get("case_id")]
+        if not case_ids:
+            return
+        self.executor.submit(self.milvus.update_recall_stats, case_ids, None)
+
+    def _finalize(
+        self,
+        result: Dict,
+        start_time: float,
+        top_cases: List[Dict],
+        stats=None,
+    ) -> Dict:
+        """补齐端到端耗时、相似案例列表与四层重排统计（供诊断接口直接返回）。"""
         result["latency_ms"] = int((time.perf_counter() - start_time) * 1000)
         result["similar_cases"] = [
             {
                 "case_id": str(c.get("case_id", "") or ""),
                 "similarity": float(c.get("distance", 0.0) or 0.0),
                 "final_score": float(c.get("_final_score", 0.0) or 0.0),
+                "l2_score": (
+                    float(c["_l2_score"]) if c.get("_l2_score") is not None else None
+                ),
+                "l3_score": (
+                    float(c["_l3_score"]) if c.get("_l3_score") is not None else None
+                ),
+                "l4_score": (
+                    float(c["_l4_score"]) if c.get("_l4_score") is not None else None
+                ),
+                "rerank_reason": str(c.get("_l4_reason", "") or "") or None,
                 "alert_template": str(c.get("alert_template", "") or ""),
                 "root_cause": str(c.get("root_cause", "") or ""),
                 "solution": str(c.get("solution", "") or ""),
@@ -149,6 +202,16 @@ class RAGPipeline:
             }
             for c in top_cases
         ]
+        if stats is not None:
+            result["rerank_stats"] = {
+                "input_count": stats.input_count,
+                "l1_out": stats.l1_out,
+                "l2_out": stats.l2_out,
+                "l3_out": stats.l3_out,
+                "final_out": stats.final_out,
+                "l3_available": stats.l3_available,
+                "l4_status": stats.l4_status,
+            }
         return result
 
     def _parse_llm_result(self, llm_output: str, top_cases: List[Dict], event: StandardizedEvent) -> Dict:
@@ -212,7 +275,7 @@ class RAGPipeline:
             if existing
             else f"case_{time.strftime('%Y%m%d_%H%M%S')}"
         )
-        embedding = self.embedder.embed(
+        embedding = self.retriever.embed_query_text(
             f"{event.template} {event.service_name} {event.error_type} {root_cause} {solution}"
         )
         case = KnowledgeCase(

@@ -42,6 +42,31 @@ def load_config(base_dir: str = ".") -> dict:
         "llm_timeout": float(os.getenv("RAG_LLM_TIMEOUT_SECONDS", "5")),
         "llm_max_workers": int(os.getenv("RAG_LLM_MAX_WORKERS", "8")),
         "recent_window_days": int(os.getenv("RAG_RECENT_WINDOW_DAYS", "30")),
+        # 四层业务重排（L1 规则过滤 -> L2 七特征融合 -> L3 Cross-Encoder -> L4 LLM Listwise）
+        "rerank": {
+            "final_k": int(os.getenv("RAG_FINAL_K", "3")),
+            "l1_max_age_days": float(os.getenv("RERANK_L1_MAX_AGE_DAYS", "365")),
+            "l1_blacklist_case_ids": [
+                x for x in os.getenv("RERANK_L1_BLACKLIST_CASE_IDS", "").split(",") if x
+            ],
+            "l1_blacklist_services": [
+                x for x in os.getenv("RERANK_L1_BLACKLIST_SERVICES", "").split(",") if x
+            ],
+            "l1_min_feedback": int(os.getenv("RERANK_L1_MIN_FEEDBACK", "-5")),
+            "l1_deprecated_keywords": [
+                x for x in os.getenv("RERANK_L1_DEPRECATED_KEYWORDS", "").split(",") if x
+            ],
+            "l2_top_k": int(os.getenv("RERANK_L2_TOP_K", "10")),
+            # 冷启动使用 reranker_l2.DEFAULT_WEIGHTS；Phase 2 可注入 LambdaRank 离线学习权重
+            "l2_weights": {},
+            "l3_enabled": os.getenv("RERANK_L3_ENABLED", "false").lower() in ("1", "true", "yes"),
+            "l3_model": os.getenv("RERANK_L3_MODEL", "BAAI/bge-reranker-v2-m3"),
+            "l3_device": os.getenv("RERANK_L3_DEVICE", "cpu"),
+            "l3_batch_size": int(os.getenv("RERANK_L3_BATCH_SIZE", "16")),
+            "l3_max_length": int(os.getenv("RERANK_L3_MAX_LENGTH", "512")),
+            "l3_top_k": int(os.getenv("RERANK_L3_TOP_K", "5")),
+            "l4_timeout": float(os.getenv("RERANK_L4_TIMEOUT_SECONDS", "3")),
+        },
         "kafka": {
             "bootstrap_servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
             "topic_standardized": os.getenv("KAFKA_TOPIC_STANDARDIZED", "standardized-events"),

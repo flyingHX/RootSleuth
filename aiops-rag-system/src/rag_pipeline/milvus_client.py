@@ -16,6 +16,10 @@ _SCHEMA_FIELDS = [
     ("severity", "INT64", {}, {}),
     ("start_time", "INT64", {}, {}),
     ("feedback_score", "INT64", {}, {"default_value": 0}),
+    ("upvotes", "INT64", {}, {"default_value": 0}),
+    ("downvotes", "INT64", {}, {"default_value": 0}),
+    ("hit_count", "INT64", {}, {"default_value": 0}),
+    ("recall_count", "INT64", {}, {"default_value": 0}),
     ("root_cause", "VARCHAR", {"max_length": 2048}, {}),
     ("solution", "VARCHAR", {"max_length": 2048}, {}),
     ("alert_template", "VARCHAR", {"max_length": 1024}, {}),
@@ -232,8 +236,11 @@ class MilvusClient:
                 pass
         return name
 
+    # 除向量外的全部标量字段（update_feedback 读改写时需带全字段，避免 upsert 清空列）
+    _ALL_SCALAR_FIELDS = [f[0] for f in _SCHEMA_FIELDS if f[1] != "FLOAT_VECTOR"]
+
     def update_feedback(self, case_id: str, delta: int) -> int:
-        """对指定案例的 feedback_score 累加 delta（+1/-1），返回新分值。"""
+        """反馈闭环：+1 记 upvotes、-1 记 downvotes；feedback_score 保留为兼容派生字段。"""
         collection = self._collection()
         if collection is None:
             return 0
@@ -241,19 +248,16 @@ class MilvusClient:
             rows = list(
                 collection.query(
                     expr=f'case_id == "{case_id}"',
-                    output_fields=[
-                        "case_id", "fingerprint", "service_name", "cluster",
-                        "error_type", "severity", "start_time", "feedback_score",
-                        "root_cause", "solution", "alert_template",
-                        "topology_snapshot", "resolved_by", "embedding", "created_at",
-                    ],
+                    output_fields=self._ALL_SCALAR_FIELDS,
                 )
             )
             if not rows:
                 logger.warning("Feedback target not found: %s", case_id)
                 return 0
             row = dict(rows[0])
-            row["feedback_score"] = int(row.get("feedback_score", 0)) + delta
+            row["upvotes"] = int(row.get("upvotes", 0) or 0) + (1 if delta > 0 else 0)
+            row["downvotes"] = int(row.get("downvotes", 0) or 0) + (1 if delta < 0 else 0)
+            row["feedback_score"] = int(row.get("feedback_score", 0) or 0) + delta
             partition = self._ensure_partition(collection, row.get("created_at"))
             collection.upsert([row], partition_name=partition)
             collection.flush()
@@ -261,6 +265,38 @@ class MilvusClient:
         except Exception as exc:  # noqa: BLE001
             logger.error("Update feedback failed: %s", exc)
             return 0
+
+    def update_recall_stats(self, case_ids: List[str], hit_flags: Optional[List[bool]] = None) -> None:
+        """召回统计回流：Top-3 进入 LLM 上下文时 recall_count+1，被人工采纳时 hit_count+1。
+
+        为 f7 命中频率特征提供数据基础；Milvus 无原子自增，逐条读改写，失败静默。
+        """
+        collection = self._collection()
+        if collection is None or not case_ids:
+            return
+        flags = list(hit_flags) if hit_flags else [False] * len(case_ids)
+        for case_id, hit in zip(case_ids, flags):
+            try:
+                rows = list(
+                    collection.query(
+                        expr=f'case_id == "{case_id}"',
+                        output_fields=["case_id", "hit_count", "recall_count", "created_at"],
+                    )
+                )
+                if not rows:
+                    continue
+                row = dict(rows[0])
+                row["recall_count"] = int(row.get("recall_count", 0) or 0) + 1
+                if hit:
+                    row["hit_count"] = int(row.get("hit_count", 0) or 0) + 1
+                partition = self._ensure_partition(collection, row.get("created_at"))
+                collection.upsert([row], partition_name=partition)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Recall stats update skipped for %s: %s", case_id, exc)
+        try:
+            collection.flush()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---------- 离线维护 ----------
     def find_near_duplicates(self, threshold: float = 0.99, sample_limit: int = 1000) -> List[tuple]:

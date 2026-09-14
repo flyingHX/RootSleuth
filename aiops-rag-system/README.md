@@ -40,7 +40,7 @@ Alertmanager/Grafana Webhook
 |------|------|
 | 日志标准化 | YAML 规则热加载 + Drain 模板提取 + LRU 缓存 + 插件机制（突发检测等） |
 | 指纹去重 | `md5(source\|service\|error_type)` 指纹，Redis TTL 防抖 + 5 分钟窗口计数，突发自动升级 severity |
-| RAG 检索 | BGE-M3 Embedding → Milvus HNSW 检索（按月分区）→ 余弦/拓扑/时间衰减/反馈综合重排 |
+| RAG 检索 | BGE-M3 Embedding → Milvus HNSW 检索（按月分区）→ 四层业务重排漏斗压缩为 Top-3 |
 | LLM 诊断 | LangChain ChatOpenAI 兼容客户端，Few-shot Prompt 强制 JSON 输出，超时熔断降级 |
 | 知识闭环 | 告警解决后案例写入知识库；人工反馈 ±1 分影响重排序；季度近重复清理 |
 | 可观测性 | Prometheus 指标（标准化/RAG/去重）、/metrics 暴露、结构化日志、健康检查 |
@@ -143,6 +143,23 @@ python scripts/cleanup_cases.py             # 执行删除（保留 feedback 分
 ```bash
 python -m pytest tests/ -v
 ```
+
+## 四层业务重排
+
+召回 Top-20 经四层漏斗压缩为 Top-3（实现于 `src/rag_pipeline/`，层间数据载体为 LangChain `Document`）：
+
+| 层 | 组件 | 漏斗 | 机制 |
+|----|------|------|------|
+| L1 | `reranker_l1.RuleFilter` | 20 → ~15 | 规则硬过滤：过期 / 黑名单 / 低反馈 / 废弃关键词案例剔除 |
+| L2 | `reranker_l2.BusinessReranker` | ~15 → 10 | 七特征加权融合：语义、拓扑、时间、反馈（贝叶斯平滑）、模板 Jaccard、新鲜度、命中率 |
+| L3 | `reranker_l3.BGEReranker` | 10 → 5 | BGE-Reranker Cross-Encoder 逐对精排；FlagEmbedding 不可用时自动透传降级 |
+| L4 | `reranker_l4.LLMListwiseReranker` | 5 → 3 | LLM Listwise 全局排序（LCEL 链）：幻觉 ID 校验 + 遗漏补全 + rank→score 归一化 |
+| 融合 | `rerank_pipeline.fuse_final_scores` | — | 可用层权重重归一化（0.2/0.4/0.4），任一层失效不塌缩 |
+
+- **逐层降级**：LLM 失败回退 L3 顺序、Cross-Encoder 失败回退 L2、全部失效仅保留 L1 结果；L4 在后台线程执行并施加独立超时（`RERANK_L4_TIMEOUT_SECONDS`），超时不阻塞主流水线。
+- **LangChain 生态**：L2/L3 实现为 `BaseDocumentCompressor`（可直接挂入 `ContextualCompressionRetriever`），检索侧包装为 `BaseRetriever`（`retriever.MilvusEventRetriever`），L4 与诊断为 LCEL 链（`ChatPromptTemplate | ChatOpenAI | JsonOutputParser`）。
+- **反馈闭环**：`/api/v1/feedback` 维护 upvotes/downvotes（派生 feedback_score 兼容字段），召回时回写 hit_count/recall_count，分别驱动 L2 的 f4 反馈分与 f7 命中率。
+- **可观测性**：`/metrics` 暴露层级延迟 `rerank_layer_latency_seconds{layer}`、各层降级计数 `rerank_degraded_total{layer}` 与最终输出数 `rerank_final_total`。
 
 ## 关键设计
 
