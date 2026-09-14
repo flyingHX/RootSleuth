@@ -1,0 +1,16 @@
+# Drain 变量替换规则：按顺序对原始日志执行 regex -> replace，将变量归一为占位符
+patterns:
+  - regex: '\b\d{1,3}(\.\d{1,3}){3}(:\d+)?'
+    replace: '<IP>'
+  - regex: '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
+    replace: '<UUID>'
+  - regex: '\b[0-9a-f]{16,64}\b'
+    replace: '<HASH>'
+  - regex: 'orderId=\d+'
+    replace: 'orderId=<ID>'
+  - regex: 'traceId=\w+'
+    replace: 'traceId=<ID>'
+  - regex: '\b\d+(\.\d+)?(ms|s)\b'
+    replace: '<DURATION>'
+  - regex: '\b\d+\b'
+    replace: '<NUM>'

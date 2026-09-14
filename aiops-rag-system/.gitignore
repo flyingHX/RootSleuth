@@ -1,0 +1,29 @@
+# ===== 密钥与环境变量（示例模板 .env.example 保留入库）=====
+.env
+.env.*
+!.env.example
+
+# ===== Python 缓存与虚拟环境 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ===== 运行日志 =====
+logs/
+*.log
+
+# ===== IDE / 操作系统 =====
+.idea/
+.vscode/
+.DS_Store

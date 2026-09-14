@@ -1,0 +1,29 @@
+{
+    "properties": {
+        "approval_id": {
+            "type": "integer"
+        },
+        "case_id": {
+            "type": "string"
+        },
+        "created_by": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "snapshot_json": {
+            "type": "string"
+        },
+        "version": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "case_id",
+        "version",
+        "snapshot_json"
+    ],
+    "title": "kb_versions",
+    "type": "object"
+}

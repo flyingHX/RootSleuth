@@ -1,0 +1,2 @@
+# 占位文件：保证 alembic/versions 目录被 Git 跟踪（迁移脚本在此目录）
+# 编译缓存（__pycache__）等产物已由根目录 .gitignore 统一忽略

@@ -1,0 +1,28 @@
+{
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "last_seen_service": {
+            "type": "string"
+        },
+        "sample_count": {
+            "type": "integer"
+        },
+        "status": {
+            "type": "string",
+            "description": "pending/promoted/ignored"
+        },
+        "suggested_error_type": {
+            "type": "string"
+        },
+        "template": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "template"
+    ],
+    "title": "unknown_templates",
+    "type": "object"
+}

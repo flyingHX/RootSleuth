@@ -1,0 +1,35 @@
+{
+    "properties": {
+        "approval_request_id": {
+            "type": "integer"
+        },
+        "created_by": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "master_case_id": {
+            "type": "string"
+        },
+        "merged_case_ids": {
+            "type": "string",
+            "description": "JSON 数组"
+        },
+        "merge_strategy_json": {
+            "type": "string"
+        },
+        "reason": {
+            "type": "string"
+        },
+        "status": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "master_case_id",
+        "merged_case_ids"
+    ],
+    "title": "kb_merge_proposals",
+    "type": "object"
+}

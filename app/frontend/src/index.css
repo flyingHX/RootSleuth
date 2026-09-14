@@ -1,0 +1,109 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* AIOps 控制台浅色主题：青灰中性色（hue 195，饱和 4~8%）+ teal 主色（hue 174） */
+    --background: 195 25% 97%;
+    --foreground: 200 25% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 200 25% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 200 25% 12%;
+
+    --primary: 174 72% 30%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 195 18% 92%;
+    --secondary-foreground: 200 22% 20%;
+
+    --muted: 195 16% 92%;
+    --muted-foreground: 200 12% 42%;
+
+    --accent: 174 40% 90%;
+    --accent-foreground: 174 60% 18%;
+
+    --destructive: 0 72% 46%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 195 14% 86%;
+    --input: 195 14% 84%;
+    --ring: 174 72% 30%;
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 200 22% 95%;
+    --sidebar-foreground: 200 18% 28%;
+    --sidebar-primary: 174 72% 30%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 195 16% 89%;
+    --sidebar-accent-foreground: 200 22% 18%;
+    --sidebar-border: 195 14% 86%;
+    --sidebar-ring: 174 72% 30%;
+  }
+
+  .dark {
+    /* 深色主题（默认）：深度由表面亮度分层，accent 略微降饱和 */
+    --background: 200 20% 7%;
+    --foreground: 195 18% 90%;
+
+    --card: 200 17% 10%;
+    --card-foreground: 195 18% 90%;
+
+    --popover: 200 18% 11%;
+    --popover-foreground: 195 18% 90%;
+
+    --primary: 174 62% 46%;
+    --primary-foreground: 200 30% 8%;
+
+    --secondary: 200 14% 16%;
+    --secondary-foreground: 195 16% 82%;
+
+    --muted: 200 14% 15%;
+    --muted-foreground: 200 10% 60%;
+
+    --accent: 200 13% 17%;
+    --accent-foreground: 195 16% 88%;
+
+    --destructive: 0 68% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 200 12% 19%;
+    --input: 200 12% 21%;
+    --ring: 174 62% 46%;
+
+    --sidebar-background: 200 19% 9%;
+    --sidebar-foreground: 200 12% 68%;
+    --sidebar-primary: 174 62% 46%;
+    --sidebar-primary-foreground: 200 30% 8%;
+    --sidebar-accent: 200 14% 14%;
+    --sidebar-accent-foreground: 195 16% 86%;
+    --sidebar-border: 200 12% 16%;
+    --sidebar-ring: 174 62% 46%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+}
+
+@layer utilities {
+  /* 日志 / 模板 / 命令专用等宽块 */
+  .log-block {
+    @apply rounded-md border bg-secondary/60 p-3 font-mono text-xs leading-relaxed text-muted-foreground break-all whitespace-pre-wrap;
+  }
+}

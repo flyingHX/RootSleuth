@@ -1,0 +1,63 @@
+{
+    "title": "cmdb_assets",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "hostname": {
+            "type": "string",
+            "description": "主机名"
+        },
+        "ip": {
+            "type": "string",
+            "description": "主机 IP"
+        },
+        "system_name": {
+            "type": "string",
+            "description": "所属业务系统"
+        },
+        "service_name": {
+            "type": "string",
+            "description": "所属服务"
+        },
+        "cluster": {
+            "type": "string",
+            "description": "所在集群"
+        },
+        "environment": {
+            "type": "string",
+            "description": "环境 prod/staging"
+        },
+        "owner": {
+            "type": "string",
+            "description": "负责人姓名"
+        },
+        "owner_email": {
+            "type": "string",
+            "description": "负责人邮箱"
+        },
+        "dependencies": {
+            "type": "string",
+            "description": "依赖组件(JSON 数组文本)"
+        },
+        "log_path": {
+            "type": "string",
+            "description": "日志路径"
+        },
+        "status": {
+            "type": "string",
+            "description": "资产状态 active/offline"
+        },
+        "description": {
+            "type": "string",
+            "description": "备注"
+        }
+    },
+    "required": [
+        "hostname",
+        "ip",
+        "system_name",
+        "service_name"
+    ]
+}

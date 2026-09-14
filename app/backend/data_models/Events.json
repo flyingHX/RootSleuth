@@ -1,0 +1,77 @@
+{
+    "properties": {
+        "ai_command": {
+            "type": "string"
+        },
+        "ai_output_json": {
+            "type": "string"
+        },
+        "ai_root_cause": {
+            "type": "string"
+        },
+        "ai_solution": {
+            "type": "string"
+        },
+        "candidates_json": {
+            "type": "string"
+        },
+        "cluster": {
+            "type": "string"
+        },
+        "confidence": {
+            "type": "number"
+        },
+        "degraded_reason": {
+            "type": "string"
+        },
+        "error_type": {
+            "type": "string"
+        },
+        "event_id": {
+            "type": "string"
+        },
+        "fingerprint": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "rag_ms": {
+            "type": "number"
+        },
+        "rag_score": {
+            "type": "number"
+        },
+        "rag_status": {
+            "type": "string"
+        },
+        "raw_log": {
+            "type": "string"
+        },
+        "service_name": {
+            "type": "string"
+        },
+        "severity": {
+            "type": "string"
+        },
+        "std_ms": {
+            "type": "number"
+        },
+        "status": {
+            "type": "string"
+        },
+        "template": {
+            "type": "string"
+        },
+        "topology": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "event_id",
+        "severity",
+        "service_name"
+    ],
+    "title": "Events",
+    "type": "object"
+}

@@ -1,0 +1,30 @@
+{
+    "properties": {
+        "change_note": {
+            "type": "string"
+        },
+        "content": {
+            "type": "string",
+            "description": "rules.yaml 内容"
+        },
+        "created_by": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "status": {
+            "type": "string",
+            "description": "current/superseded"
+        },
+        "version": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "version",
+        "content"
+    ],
+    "title": "rule_versions",
+    "type": "object"
+}

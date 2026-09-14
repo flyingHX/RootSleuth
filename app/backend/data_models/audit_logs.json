@@ -1,0 +1,39 @@
+{
+    "properties": {
+        "action": {
+            "type": "string"
+        },
+        "actor": {
+            "type": "string"
+        },
+        "after_json": {
+            "type": "string"
+        },
+        "before_json": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "ip": {
+            "type": "string"
+        },
+        "target_id": {
+            "type": "string"
+        },
+        "target_type": {
+            "type": "string"
+        },
+        "ua": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "actor",
+        "action",
+        "target_type",
+        "target_id"
+    ],
+    "title": "audit_logs",
+    "type": "object"
+}

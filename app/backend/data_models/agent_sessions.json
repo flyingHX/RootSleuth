@@ -1,0 +1,57 @@
+{
+    "title": "agent_sessions",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "session_type": {
+            "type": "string",
+            "description": "会话类型 diagnose/kb_governance/oncall"
+        },
+        "event_id": {
+            "type": "integer",
+            "description": "关联事件 ID(诊断场景)"
+        },
+        "status": {
+            "type": "string",
+            "description": "执行状态 succeeded/degraded/failed"
+        },
+        "model": {
+            "type": "string",
+            "description": "使用的模型"
+        },
+        "iterations": {
+            "type": "integer",
+            "description": "推理轮数"
+        },
+        "duration_ms": {
+            "type": "number",
+            "description": "总耗时毫秒"
+        },
+        "tool_trace": {
+            "type": "string",
+            "description": "工具调用轨迹(JSON 数组文本)"
+        },
+        "result_json": {
+            "type": "string",
+            "description": "最终结果(JSON 文本)"
+        },
+        "error_message": {
+            "type": "string",
+            "description": "失败/降级原因"
+        },
+        "actor": {
+            "type": "string",
+            "description": "发起人"
+        },
+        "summary": {
+            "type": "string",
+            "description": "一句话摘要"
+        }
+    },
+    "required": [
+        "session_type",
+        "status"
+    ]
+}

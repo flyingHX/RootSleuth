@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rag-pipeline-tests:
+    name: RAG 流水线测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: aiops-rag-system/requirements.txt
+      - name: 安装依赖
+        run: pip install -r aiops-rag-system/requirements.txt
+      - name: pytest（外部依赖使用 Fake 桩，无需中间件）
+        working-directory: aiops-rag-system
+        run: pytest -q
+
+  console-backend:
+    name: 控制台后端静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: app/backend/requirements.txt
+      - name: 安装依赖
+        run: pip install -r app/backend/requirements.txt
+      - name: 语法检查
+        run: python -m compileall -q app/backend
+
+  console-frontend:
+    name: 控制台前端 Lint 与构建
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app/frontend/pnpm-lock.yaml
+      - name: 安装依赖
+        working-directory: app/frontend
+        run: pnpm install --frozen-lockfile
+      - name: ESLint
+        working-directory: app/frontend
+        run: pnpm run lint
+      - name: Vite 生产构建
+        working-directory: app/frontend
+        run: pnpm run build

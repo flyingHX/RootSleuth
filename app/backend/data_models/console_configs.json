@@ -1,0 +1,22 @@
+{
+    "properties": {
+        "config_key": {
+            "type": "string"
+        },
+        "config_value": {
+            "type": "string"
+        },
+        "description": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "config_key",
+        "config_value"
+    ],
+    "title": "console_configs",
+    "type": "object"
+}

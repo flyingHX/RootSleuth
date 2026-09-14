@@ -1,0 +1,46 @@
+{
+    "properties": {
+        "after_json": {
+            "type": "string"
+        },
+        "approval_request_id": {
+            "type": "integer"
+        },
+        "before_json": {
+            "type": "string"
+        },
+        "case_id": {
+            "type": "string"
+        },
+        "change_type": {
+            "type": "string",
+            "description": "EDIT/DELETE/ARCHIVE"
+        },
+        "created_by": {
+            "type": "string"
+        },
+        "diff_json": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "reason": {
+            "type": "string"
+        },
+        "status": {
+            "type": "string",
+            "description": "DRAFT/PENDING/APPROVED/PUBLISHED/REJECTED/WITHDRAWN/ROLLED_BACK"
+        },
+        "version": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "case_id",
+        "change_type",
+        "created_by"
+    ],
+    "title": "kb_change_sets",
+    "type": "object"
+}

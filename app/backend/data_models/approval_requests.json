@@ -1,0 +1,50 @@
+{
+    "properties": {
+        "applicant": {
+            "type": "string"
+        },
+        "applicant_role": {
+            "type": "string"
+        },
+        "biz_id": {
+            "type": "string"
+        },
+        "biz_type": {
+            "type": "string",
+            "description": "KB_EDIT/KB_DELETE/KB_ARCHIVE/KB_MERGE/RULE_PUBLISH/UNKNOWN_PROMOTE 等"
+        },
+        "current_step": {
+            "type": "integer"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "published_at": {
+            "type": "string"
+        },
+        "reason": {
+            "type": "string"
+        },
+        "risk_level": {
+            "type": "string",
+            "description": "LOW/MEDIUM/HIGH"
+        },
+        "status": {
+            "type": "string",
+            "description": "DRAFT/PENDING/APPROVED/REJECTED/WITHDRAWN/PUBLISHED/PUBLISH_FAILED/ROLLED_BACK"
+        },
+        "title": {
+            "type": "string"
+        },
+        "total_steps": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "biz_type",
+        "title",
+        "applicant"
+    ],
+    "title": "approval_requests",
+    "type": "object"
+}

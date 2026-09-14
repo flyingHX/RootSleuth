@@ -1,0 +1,36 @@
+{
+    "properties": {
+        "action": {
+            "type": "string",
+            "description": "APPROVED/REJECTED"
+        },
+        "acted_at": {
+            "type": "string"
+        },
+        "approver": {
+            "type": "string"
+        },
+        "approver_role": {
+            "type": "string"
+        },
+        "comment": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "request_id": {
+            "type": "integer"
+        },
+        "step_no": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "request_id",
+        "step_no",
+        "approver_role"
+    ],
+    "title": "approval_steps",
+    "type": "object"
+}

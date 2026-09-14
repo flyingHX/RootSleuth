@@ -1,0 +1,52 @@
+{
+    "title": "oncall_reports",
+    "type": "object",
+    "properties": {
+        "id": {
+            "type": "integer"
+        },
+        "time_window": {
+            "type": "string",
+            "description": "统计时间窗 1h/24h/7d"
+        },
+        "event_count": {
+            "type": "integer",
+            "description": "窗口内告警总数"
+        },
+        "critical_count": {
+            "type": "integer",
+            "description": "critical 告警数"
+        },
+        "warning_count": {
+            "type": "integer",
+            "description": "warning 告警数"
+        },
+        "info_count": {
+            "type": "integer",
+            "description": "info 告警数"
+        },
+        "affected_systems": {
+            "type": "string",
+            "description": "受影响系统汇总(JSON 文本)"
+        },
+        "report_json": {
+            "type": "string",
+            "description": "AI 报告(JSON 文本)"
+        },
+        "chatops_text": {
+            "type": "string",
+            "description": "ChatOps 消息文本"
+        },
+        "session_id": {
+            "type": "integer",
+            "description": "关联 agent_sessions ID"
+        },
+        "actor": {
+            "type": "string",
+            "description": "发起人"
+        }
+    },
+    "required": [
+        "time_window"
+    ]
+}

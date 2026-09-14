@@ -1,0 +1,80 @@
+# 标准化决策图谱（核心资产）
+# 规则按 priority 升序遍历，同分取先出现者；score 为该规则命中后的累计基数
+rules:
+  # 场景1：精准正则匹配（比关键词更准，优先级最高）
+  - id: mysql_deadlock
+    priority: 1
+    conditions:
+      regex: 'Deadlock found when trying to get lock; try restarting transaction'
+    score: 100
+
+  # 场景1b：Redis 节点不可达（必须全部包含 any_include 加分）
+  - id: redis_connection_refused
+    priority: 2
+    conditions:
+      must_include: ["redis", "connection refused"]
+      any_include: ["6379", "sentinel", "cluster"]
+    score: 90
+
+  # 场景2：常规关键词匹配
+  - id: redis_timeout
+    priority: 3
+    conditions:
+      must_include: ["jedis", "timeout"]    # 必须全部包含
+      any_include: ["pool", "connection"]   # 包含任一加分
+      exclude: ["sentinel"]                 # 命中则跳过
+    score: 95
+
+  # 场景2b：MySQL 慢查询
+  - id: mysql_slow_query
+    priority: 4
+    conditions:
+      must_include: ["mysql", "slow"]
+      any_include: ["query", "lock_wait"]
+    score: 85
+
+  # 场景2c：网关 502（"502" 会被 Drain 提取为 <NUM>，故用语义关键词 "bad gateway" 匹配）
+  - id: gateway_502
+    priority: 5
+    conditions:
+      must_include: ["bad gateway"]
+      any_include: ["nginx", "upstream"]
+    score: 80
+
+  # 场景2d：JVM 内存溢出
+  - id: jvm_oom
+    priority: 6
+    conditions:
+      must_include: ["outofmemoryerror"]
+      any_include: ["heap space", "metaspace"]
+    score: 95
+
+  # 场景2e：K8s Pod OOMKilled
+  - id: k8s_oomkill
+    priority: 7
+    conditions:
+      must_include: ["oomkilled"]
+    score: 90
+
+  # 场景2f：ES 集群健康
+  - id: es_cluster_red
+    priority: 8
+    conditions:
+      must_include: ["elasticsearch", "red"]
+      any_include: ["unassigned", "shards"]
+    score: 80
+
+  # 场景3：插件化逻辑（基于频率）
+  - id: burst_error
+    priority: 10
+    conditions:
+      must_include: ["exception"]
+    score: 10
+    handler: "burst_detector"   # 触发自定义插件
+
+  # 场景4：通用兜底（防止一切漏网）
+  - id: generic_app_error
+    priority: 99
+    conditions:
+      must_include: ["error", "exception"]
+    score: 30

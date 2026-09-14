@@ -1,0 +1,85 @@
+{
+    "properties": {
+        "ai_command": {
+            "type": "string",
+            "description": "LLM 建议命令"
+        },
+        "ai_output_json": {
+            "type": "string",
+            "description": "LLM 原始输出 JSON"
+        },
+        "ai_root_cause": {
+            "type": "string"
+        },
+        "ai_solution": {
+            "type": "string"
+        },
+        "candidates_json": {
+            "type": "string",
+            "description": "RAG 候选集 JSON"
+        },
+        "cluster": {
+            "type": "string"
+        },
+        "confidence": {
+            "type": "number"
+        },
+        "degraded_reason": {
+            "type": "string",
+            "description": "降级原因"
+        },
+        "error_type": {
+            "type": "string"
+        },
+        "event_id": {
+            "type": "string"
+        },
+        "fingerprint": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "rag_ms": {
+            "type": "number",
+            "description": "RAG 耗时 ms"
+        },
+        "rag_score": {
+            "type": "number"
+        },
+        "rag_status": {
+            "type": "string",
+            "description": "none/pending/success/degraded"
+        },
+        "raw_log": {
+            "type": "string"
+        },
+        "severity": {
+            "type": "string",
+            "description": "critical/high/medium/low"
+        },
+        "std_ms": {
+            "type": "number",
+            "description": "标准化耗时 ms"
+        },
+        "status": {
+            "type": "string",
+            "description": "open/processing/resolved/closed"
+        },
+        "template": {
+            "type": "string",
+            "description": "Drain 模板"
+        },
+        "topology": {
+            "type": "string",
+            "description": "拓扑 JSON 字符串"
+        }
+    },
+    "required": [
+        "event_id",
+        "severity",
+        "service"
+    ],
+    "title": "events",
+    "type": "object"
+}

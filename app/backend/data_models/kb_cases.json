@@ -1,0 +1,51 @@
+{
+    "properties": {
+        "alert_template": {
+            "type": "string"
+        },
+        "case_id": {
+            "type": "string"
+        },
+        "cluster": {
+            "type": "string"
+        },
+        "error_type": {
+            "type": "string"
+        },
+        "feedback_score": {
+            "type": "number"
+        },
+        "fingerprint": {
+            "type": "string"
+        },
+        "id": {
+            "type": "integer"
+        },
+        "root_cause": {
+            "type": "string"
+        },
+        "service_name": {
+            "type": "string"
+        },
+        "solution": {
+            "type": "string"
+        },
+        "status": {
+            "type": "string",
+            "description": "active/archived/merged"
+        },
+        "topology_snapshot": {
+            "type": "string"
+        },
+        "version": {
+            "type": "integer"
+        }
+    },
+    "required": [
+        "case_id",
+        "service_name",
+        "error_type"
+    ],
+    "title": "kb_cases",
+    "type": "object"
+}
