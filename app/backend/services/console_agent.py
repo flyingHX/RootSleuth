@@ -15,6 +15,7 @@
 - kb_governance：AI 起草失败仅保留聚类统计与合并提案
 - oncall：AI 失败生成确定性统计报告
 """
+import asyncio
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +49,9 @@ from services.console_common import get_config, mask_sensitive, now_iso, write_a
 logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 6
+FORMAT_RETRY_BUDGET = 2  # 非法 JSON 纠正独立预算（不计入推理轮次，评审 P1-5）
+KB_SEARCH_SCAN_LIMIT = 200  # search_kb 单次扫描上限（评审 P0-1：避免全量加载）
+EVIDENCE_TOKEN_OVERLAP = 0.6  # 证据交叉校验词元重合阈值（评审 P0-2）
 SEVERITY_RANK = {"critical": 3, "warning": 2, "info": 1}
 WINDOW_DELTAS_HOURS = {"1h": 1, "24h": 24, "7d": 168}
 ONCALL_PRIORITIES = {"P0", "P1", "P2", "P3"}
@@ -56,9 +61,10 @@ DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是 AIOps 诊断 Agent。你只能通过工
 可用工具：
 1. get_alert_detail - args: {}。返回告警详情：主机线索（extracted_ips / extracted_host_tokens）、服务、集群、模板、原始日志、拓扑，以及既有单轮诊断结论（若有）。
 2. query_cmdb - args: {"ip"?: "...", "hostname"?: "...", "service_name"?: "..."}。返回 CMDB 资产：所属系统、服务、集群、负责人、依赖组件、日志路径。
-3. read_recent_logs - args: {"service_name"?: "...", "limit"?: 10}。返回该服务最近的告警日志样本。
+3. read_recent_alert_samples - args: {"service_name"?: "...", "limit"?: 10}。返回该服务最近的告警日志样本（数据源为告警事件库，非完整日志文件）。
 4. query_rules - args: {"keywords"?: ["..."]}。返回当前激活分类规则（可按关键词过滤）。
-5. search_kb - args: {"error_type"?: "...", "service_name"?: "..."}。返回知识库相似案例（按业务重排评分）。
+5. search_kb - args: {"error_type"?: "...", "service_name"?: "..."}。返回知识库相似案例（RAG 向量召回 + 四层重排，不可用时降级本地检索；优先带 error_type / service_name 收窄范围）。
+6. 并行取证：相互独立的工具可在同一轮一次性声明（最多 3 个）：{"thought": "...", "action": {"tools": [{"tool": "query_cmdb", "args": {...}}, {"tool": "query_rules", "args": {}}]}}。
 
 输出要求（每轮只输出一个 JSON 对象，禁止 Markdown 或多余文本）：
 {"thought": "本轮推理与下一步计划", "action": {"tool": "工具名", "args": {...}}}
@@ -260,6 +266,107 @@ def _normalize_finish_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+def _record_usage(
+    trace: List[Dict[str, Any]],
+    usage: Optional[Dict[str, Any]],
+    acc: Dict[str, int],
+) -> None:
+    """记录单次 LLM 调用的 token 用量：追加轨迹明细并累加会话级汇总（评审 P2）。"""
+    if not usage:
+        return
+    try:
+        prompt_t = int(usage.get("prompt_tokens") or 0)
+        completion_t = int(usage.get("completion_tokens") or 0)
+        total_t = int(usage.get("total_tokens") or (prompt_t + completion_t))
+    except (TypeError, ValueError):
+        return
+    if prompt_t <= 0 and completion_t <= 0 and total_t <= 0:
+        return
+    acc["prompt_tokens"] = acc.get("prompt_tokens", 0) + prompt_t
+    acc["completion_tokens"] = acc.get("completion_tokens", 0) + completion_t
+    acc["total_tokens"] = acc.get("total_tokens", 0) + total_t
+    trace.append({"usage": {"prompt_tokens": prompt_t, "completion_tokens": completion_t, "total_tokens": total_t}})
+
+
+def _summarize_usage(acc: Dict[str, int]) -> Optional[Dict[str, int]]:
+    """会话级 token 汇总；全程无用量上报时返回 None。"""
+    if not acc or not any(acc.get(k) for k in ("prompt_tokens", "completion_tokens", "total_tokens")):
+        return None
+    return {
+        "prompt_tokens": acc.get("prompt_tokens", 0),
+        "completion_tokens": acc.get("completion_tokens", 0),
+        "total_tokens": acc.get("total_tokens", 0),
+    }
+
+
+async def _run_tool_call(tools: Dict[str, ToolHandler], call: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
+    """执行单个工具调用；失败不抛出，返回 (tool_name, observation)。"""
+    tool_name = str(call.get("tool") or "")
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    handler = tools.get(tool_name)
+    if handler is None:
+        return tool_name, {"error": f"未知工具 {tool_name}", "available": sorted(tools)}
+    try:
+        return tool_name, await handler(args)
+    except Exception as exc:  # noqa: BLE001 - 单个工具失败不终止推理
+        logger.warning("Agent tool %s failed: %s", tool_name, exc)
+        return tool_name, {"error": f"工具执行失败: {type(exc).__name__}: {exc}"}
+
+
+def _append_observation(messages: List[ChatMessage], tool_name: str, observation: Dict[str, Any]) -> None:
+    """将工具观察回填为对话消息（超长截断，保持与旧版一致的 4000 字符上限）。"""
+    observation_text = json.dumps(observation, ensure_ascii=False)[:4000]
+    messages.append(
+        ChatMessage(
+            role="user",
+            content=(
+                f"OBSERVATION（工具 {tool_name} 返回）：\n{observation_text}\n\n"
+                "请继续：若信息足够请输出 finish JSON，否则输出下一轮 action。"
+            ),
+        )
+    )
+
+
+def _tokens_overlap(text: str, observation_text: str) -> float:
+    """轻量词元重合度：证据句与工具观察文本的词元交集占比（0~1）。"""
+    stop = {"的", "了", "在", "是", "和", "与", "或", "及", "为", "有", "a", "an", "the", "of", "to", "in", "on", "and", "or"}
+
+    def to_tokens(value: str) -> set:
+        normalized = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", " ", str(value or "").lower())
+        return {t for t in normalized.split() if len(t) > 1 and t not in stop}
+
+    ev = to_tokens(text)
+    if not ev:
+        return 1.0
+    return len(ev & to_tokens(observation_text)) / len(ev)
+
+
+def _filter_evidence_by_trace(
+    evidence: List[str],
+    trace: List[Dict[str, Any]],
+) -> Tuple[List[str], int]:
+    """证据交叉校验（评审 P0-2）：仅保留能在工具轨迹观察中找到来源的证据。
+
+    校验策略：证据句与全部工具观察拼接文本的词元重合度 ≥ EVIDENCE_TOKEN_OVERLAP 即视为有出处；
+    全部证据都被过滤时放行原始证据（避免误杀真实结论），仅返回过滤计数供审计与前端提示。
+    """
+    observations: List[str] = []
+    for step in trace:
+        obs = step.get("observation")
+        if isinstance(obs, dict):
+            observations.append(json.dumps(obs, ensure_ascii=False))
+        elif obs:
+            observations.append(str(obs))
+    if not observations:
+        return evidence, 0
+    blob = "\n".join(observations)
+    kept = [e for e in evidence if _tokens_overlap(e, blob) >= EVIDENCE_TOKEN_OVERLAP]
+    filtered = len(evidence) - len(kept)
+    if not kept:
+        return evidence, filtered
+    return kept, filtered
+
+
 async def _run_react(
     db: AsyncSession,
     system_prompt: str,
@@ -274,14 +381,21 @@ async def _run_react(
     ]
     started = time.perf_counter()
     iterations = 0
+    usage_acc: Dict[str, int] = {}
 
+    format_retries_left = FORMAT_RETRY_BUDGET
     while iterations < MAX_ITERATIONS:
         iterations += 1
         await _flush(db)
         response = await _llm_chat(db, messages)
+        _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is None:
             trace.append({"iteration": iterations, "error": "invalid_json", "raw": (response.content or "")[:400]})
+            # 格式纠错走独立重试预算（评审 P1）：预算内不消耗推理轮次，避免轮次被格式错误耗尽
+            if format_retries_left > 0:
+                format_retries_left -= 1
+                iterations -= 1
             messages = messages + [
                 ChatMessage(role="user", content="上一轮输出不是合法 JSON，请严格按约定只输出一个 JSON 对象。"),
             ]
@@ -292,67 +406,89 @@ async def _run_react(
                 "result": _normalize_finish_result(payload),
                 "iterations": iterations,
                 "trace": trace,
+                "usage": usage_acc,
                 "elapsed_ms": (time.perf_counter() - started) * 1000.0,
             }
 
         action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
-        tool_name = str(action.get("tool") or "")
-        args = action.get("args") if isinstance(action.get("args"), dict) else {}
-        handler = tools.get(tool_name)
-        if handler is None:
-            observation: Dict[str, Any] = {"error": f"未知工具 {tool_name}", "available": sorted(tools)}
+        calls: List[Dict[str, Any]] = []
+        single_tool = str(action.get("tool") or "")
+        if single_tool:
+            calls.append(
+                {"tool": single_tool, "args": action.get("args") if isinstance(action.get("args"), dict) else {}}
+            )
+        for item in (action.get("tools") or []):  # 并行取证（评审 P1）：单轮最多 3 个独立工具
+            if isinstance(item, dict) and str(item.get("tool") or ""):
+                calls.append(
+                    {
+                        "tool": str(item["tool"]),
+                        "args": item.get("args") if isinstance(item.get("args"), dict) else {},
+                    }
+                )
+        calls = calls[:3]
+
+        step_trace: Dict[str, Any] = {"iteration": iterations, "thought": payload.get("thought")}
+        if not calls:
+            observation = {"error": "action 缺少 tool / tools 字段", "available": sorted(tools)}
+            step_trace.update({"tool": "", "args": {}, "observation": observation})
+        elif len(calls) == 1:
+            tool_name, observation = await _run_tool_call(tools, calls[0])
+            step_trace.update({"tool": tool_name, "args": calls[0]["args"], "observation": observation})
         else:
-            try:
-                observation = await handler(args)
-            except Exception as exc:  # noqa: BLE001 - 单个工具失败不终止推理
-                logger.warning("Agent tool %s failed: %s", tool_name, exc)
-                observation = {"error": f"工具执行失败: {type(exc).__name__}: {exc}"}
+            tool_name = " + ".join(call["tool"] for call in calls)
+            observations = list(await asyncio.gather(*(_run_tool_call(tools, call) for call in calls)))
+            observation = {"parallel": [{"tool": name, "observation": obs} for name, obs in observations]}
+            step_trace.update(
+                {
+                    "tool": tool_name,
+                    "args": {call["tool"]: call["args"] for call in calls},
+                    "observation": observation,
+                }
+            )
+        trace.append(step_trace)
+        messages = messages + [ChatMessage(role="assistant", content=json.dumps(payload, ensure_ascii=False))]
+        _append_observation(messages, tool_name, observation)
 
-        observation_text = json.dumps(observation, ensure_ascii=False)[:4000]
-        trace.append(
-            {
-                "iteration": iterations,
-                "thought": payload.get("thought"),
-                "tool": tool_name,
-                "args": args,
-                "observation": observation,
-            }
-        )
-        messages = messages + [
-            ChatMessage(role="assistant", content=json.dumps(payload, ensure_ascii=False)),
-            ChatMessage(
-                role="user",
-                content=(
-                    f"OBSERVATION（工具 {tool_name} 返回）：\n{observation_text}\n\n"
-                    "请继续：若信息足够请输出 finish JSON，否则输出下一轮 action。"
-                ),
-            ),
-        ]
+    # 超限强制收尾：独立收尾函数（最多重试 2 次），避免单次输出抖动导致整体失败
+    return await _conclude_react(db, messages, trace, iterations, started, usage_acc)
 
-    # 超限强制收尾（最多重试一次，避免单次输出抖动导致整体失败）
+
+async def _conclude_react(
+    db: AsyncSession,
+    messages: List[ChatMessage],
+    trace: List[Dict[str, Any]],
+    iterations: int,
+    started: float,
+    usage_acc: Dict[str, int],
+) -> Dict[str, Any]:
+    """超限强制收尾：要求模型基于已有观察立即输出 finish JSON（最多重试 2 次）。"""
     await _flush(db)
-    messages = messages + [
+    final_messages = messages + [
         ChatMessage(
             role="user",
-            content=f"已达最大推理轮数（{MAX_ITERATIONS}）。请基于已获得的观察立即输出 finish JSON，给出当前最优结论。",
+            content=(
+                f"已达最大推理轮数（{MAX_ITERATIONS}）。请基于已获得的观察立即输出 finish JSON，给出当前最优结论。"
+            ),
         )
     ]
     for _attempt in range(2):
-        response = await _llm_chat(db, messages)
+        response = await _llm_chat(db, final_messages)
+        _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is not None and payload.get("finish"):
             return {
                 "result": _normalize_finish_result(payload),
                 "iterations": iterations + 1,
                 "trace": trace,
+                "usage": usage_acc,
                 "elapsed_ms": (time.perf_counter() - started) * 1000.0,
             }
-        messages = messages + [
+        final_messages = final_messages + [
             ChatMessage(role="assistant", content=(response.content or "")[:2000]),
             ChatMessage(
                 role="user",
                 content=(
-                    "输出仍不符合要求。请只输出一个 JSON 对象："
+                    "输出仍不符合要求。请只输出一个 JSON 对象，形如 "
                     '{"thought": "...", "finish": true, "result": {"root_cause": "...", "solution": "...", '
                     '"confidence": 0.0~1.0, "evidence_chain": ["..."], "command": ""}}'
                 ),
@@ -361,7 +497,11 @@ async def _run_react(
     raise ValueError("agent_failed_to_conclude")
 
 
-def _validate_diagnose_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _validate_diagnose_result(
+    result: Dict[str, Any],
+    trace: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """结论校验：字段完整性 + confidence 归一化（0~1 原生，兼容 0~100 / 0~10）+ 证据交叉校验。"""
     root_cause = str(result.get("root_cause") or "").strip()
     solution = str(result.get("solution") or "").strip()
     if not root_cause or not solution:
@@ -371,18 +511,59 @@ def _validate_diagnose_result(result: Dict[str, Any]) -> Optional[Dict[str, Any]
     except (TypeError, ValueError):
         return None
     if confidence > 1.0 and confidence <= 100.0:
-        confidence = confidence / 100.0
+        # 评审 P2：百分制（>10）除以 100；10 分制（1~10] 除以 10，避免 9 分被误判 0.09
+        confidence = confidence / (100.0 if confidence > 10.0 else 10.0)
     if not (0.0 <= confidence <= 1.0):
         return None
     evidence_raw = result.get("evidence_chain")
     evidence = [str(e).strip() for e in evidence_raw if str(e).strip()] if isinstance(evidence_raw, list) else []
-    return {
+    evidence_filtered = 0
+    if evidence and trace:
+        evidence, evidence_filtered = _filter_evidence_by_trace(evidence, trace)
+    validated = {
         "root_cause": root_cause,
         "solution": solution,
         "confidence": round(confidence, 4),
         "evidence_chain": evidence[:10],
         "command": str(result.get("command") or "").strip(),
     }
+    if evidence_filtered:
+        validated["evidence_filtered_count"] = evidence_filtered
+    return validated
+
+
+async def _rag_kb_search(
+    db: AsyncSession,
+    error_type: str,
+    service_name: str,
+    template: str,
+    top_k: int = 5,
+) -> Optional[List[Dict[str, Any]]]:
+    """调用 RAG 服务检索相似知识案例（评审 P0-1）。
+
+    返回 None 表示 RAG 未配置或不可用，调用方应降级为本地 PostgreSQL 召回；
+    正常返回案例列表（可能为空）。遵循全系统 fail-open 语义，异常不向上抛。
+    """
+    base = str(await get_config(db, "rag_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{base}/api/v1/kb-search",
+                json={
+                    "service_name": service_name,
+                    "error_type": error_type,
+                    "template": (template or "")[:500],
+                    "top_k": top_k,
+                },
+            )
+            resp.raise_for_status()
+            cases = resp.json().get("cases")
+        return cases if isinstance(cases, list) else None
+    except Exception as exc:  # noqa: BLE001 - RAG 不可用时降级本地召回
+        logger.warning("RAG kb-search failed, fallback to postgres: %s", exc)
+        return None
 
 
 # ------------------ 诊断 Agent（需求 a） ------------------
@@ -423,7 +604,7 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
             return {"matches": [], "note": f"CMDB 未登记 {key}，请尝试 service_name 或其他主机线索"}
         return {"matches": [ser_asset(a) for a in assets[:5]]}
 
-    async def read_recent_logs(args: Dict[str, Any]) -> Dict[str, Any]:
+    async def read_recent_alert_samples(args: Dict[str, Any]) -> Dict[str, Any]:
         service = str(args.get("service_name") or "").strip()
         if not service:
             key = str(args.get("ip") or args.get("hostname") or "").strip()
@@ -431,7 +612,7 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
                 assets = await _search_cmdb(db, key)
                 service = assets[0].service_name if assets else ""
         if not service:
-            return {"error": "read_recent_logs 需要 service_name 或可解析到服务的主机线索"}
+            return {"error": "read_recent_alert_samples 需要 service_name 或可解析到服务的主机线索"}
         limit = min(int(args.get("limit") or 10), 20)
         result = await db.execute(
             select(Events)
@@ -486,9 +667,19 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
         return {"active_version": active.version, "rules": entries[:20]}
 
     async def search_kb(args: Dict[str, Any]) -> Dict[str, Any]:
+        """知识检索（评审 P0-1）：优先 RAG 服务向量召回 + 四层重排，失败降级本地数据库限界扫描。"""
         error_type = str(args.get("error_type") or "").strip()
         service = str(args.get("service_name") or "").strip()
-        result = await db.execute(select(Kb_cases).where(Kb_cases.status != "archived"))
+        rag_cases = await _rag_kb_search(db, error_type, service, event.template or "")
+        if rag_cases is not None:
+            return {"source": "rag", "cases": rag_cases[:5]}
+        # 降级路径：PostgreSQL 限界召回（仅取最新 KB_SEARCH_SCAN_LIMIT 条，避免全量扫描）
+        result = await db.execute(
+            select(Kb_cases)
+            .where(Kb_cases.status != "archived")
+            .order_by(Kb_cases.id.desc())
+            .limit(KB_SEARCH_SCAN_LIMIT)
+        )
         scored = []
         for case in result.scalars().all():
             if error_type and case.error_type != error_type:
@@ -501,6 +692,7 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
             scored.append((score, case))
         scored.sort(key=lambda item: item[0], reverse=True)
         return {
+            "source": "postgres_fallback",
             "cases": [
                 {
                     "case_id": case.case_id,
@@ -518,7 +710,7 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
     return {
         "get_alert_detail": get_alert_detail,
         "query_cmdb": query_cmdb,
-        "read_recent_logs": read_recent_logs,
+        "read_recent_alert_samples": read_recent_alert_samples,
         "query_rules": query_rules,
         "search_kb": search_kb,
     }
@@ -550,7 +742,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
     task_prompt = (
         f"请诊断告警：event_id={event.event_id}（数据库主键 {event.id}）。\n"
         "建议流程：get_alert_detail →（按需）query_cmdb 确认主机所属系统/服务/负责人与日志路径 → "
-        "read_recent_logs / query_rules / search_kb 交叉验证 → finish 输出根因结论。\n"
+        "read_recent_alert_samples / query_rules / search_kb 交叉验证 → finish 输出根因结论。\n"
         "证据足够时尽快输出 finish，不要为用满轮数而继续调用工具；结论 root_cause 与 solution 各控制在 150 字以内。"
     )
     started = time.perf_counter()
@@ -558,7 +750,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
     loop_error: Optional[str] = None
     try:
         loop_result = await _run_react(db, DIAGNOSE_AGENT_SYSTEM_PROMPT, task_prompt, tools)
-        conclusion = _validate_diagnose_result(loop_result["result"])
+        conclusion = _validate_diagnose_result(loop_result["result"], loop_result["trace"])
         if conclusion is None:
             loop_error = "invalid_agent_conclusion"
             loop_result = None
@@ -568,9 +760,31 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
         loop_result = None
 
     if loop_result is not None and loop_error is None:
-        conclusion = _validate_diagnose_result(loop_result["result"])
+        # conclusion 已在 try 块中经 _validate_diagnose_result(result, trace) 校验通过
         elapsed = loop_result["elapsed_ms"]
         threshold = float(await get_config(db, "confidence_threshold", "0.75") or 0.75)
+        usage_summary = _summarize_usage(loop_result.get("usage") or {})
+        # 重跑保留旧结论（评审 P0-3）：覆盖前把上一版结论落库为 superseded 会话
+        previous_conclusion = {
+            "root_cause": event.ai_root_cause,
+            "solution": event.ai_solution,
+            "confidence": event.confidence,
+            "ai_output": _loads(event.ai_output_json),
+        }
+        if str(previous_conclusion.get("root_cause") or "").strip():
+            await _save_session(
+                db,
+                session_type="diagnose",
+                status="superseded",
+                model=model_name,
+                event_id=event.id,
+                result={"previous_conclusion": previous_conclusion},
+                trace=[],
+                iterations=0,
+                elapsed_ms=elapsed,
+                actor=actor,
+                summary="重跑诊断前保留的旧结论",
+            )
         event.ai_root_cause = conclusion["root_cause"]
         event.ai_solution = conclusion["solution"]
         event.ai_command = conclusion["command"] or None
@@ -586,7 +800,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
             status="succeeded",
             model=model_name,
             event_id=event.id,
-            result={"conclusion": conclusion, "threshold": threshold},
+            result={"conclusion": conclusion, "threshold": threshold, "usage": usage_summary},
             trace=loop_result["trace"],
             iterations=loop_result["iterations"],
             elapsed_ms=elapsed,
@@ -604,6 +818,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "model": model_name,
                 "iterations": loop_result["iterations"],
                 "confidence": conclusion["confidence"],
+                "usage": usage_summary,
                 "low_confidence": conclusion["confidence"] < threshold,
             },
         )
@@ -616,6 +831,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "model": model_name,
                 "iterations": loop_result["iterations"],
                 "duration_ms": round(elapsed, 2),
+                "usage": usage_summary,
                 "tool_trace": loop_result["trace"],
                 "conclusion": {
                     **conclusion,

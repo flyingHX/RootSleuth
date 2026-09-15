@@ -138,6 +138,49 @@ class RAGPipeline:
         finally:
             rag_latency.observe(time.perf_counter() - start_time)
 
+    def retrieve_top_cases(self, event: Union[StandardizedEvent, Dict], top_k: int = 5) -> List[Dict]:
+        """仅召回 + 四层重排（不调用诊断 LLM）：供控制台诊断 Agent 的 search_kb 工具使用。
+
+        与 search() 的差异：跳过 LLM 诊断与召回统计回流，返回带各层分数的 Top-K 案例；
+        宽松构造事件（缺失字段给中性默认值），任何异常静默降级为空列表（fail-open）。
+        """
+        try:
+            if isinstance(event, dict):
+                event = StandardizedEvent(
+                    **{
+                        "event_id": "adhoc", "fingerprint": "", "service_name": "",
+                        "cluster": "", "error_type": "",
+                        **{k: v for k, v in event.items() if v is not None},
+                    }
+                )
+            query_vector = self.retriever.embed_query_text(self._build_query_text(event))
+            candidate_docs = self.retriever.retrieve_event(event, query_vector)
+            if not candidate_docs:
+                return []
+            # 缺省时间戳回退为当前毫秒，避免 L1 过期过滤 / L2 时间衰减在 now_ms=0 下误杀
+            now_ms = event.timestamp if event.timestamp > 0 else int(time.time() * 1000)
+            rerank_result = self.rerank_pipeline.rerank(
+                rows=candidate_docs, event=event, now_ms=now_ms
+            )
+            return [
+                {
+                    "case_id": str(c.get("case_id", "") or ""),
+                    "service_name": str(c.get("service_name", "") or ""),
+                    "error_type": str(c.get("error_type", "") or ""),
+                    "alert_template": str(c.get("alert_template", "") or ""),
+                    "root_cause": str(c.get("root_cause", "") or ""),
+                    "solution": str(c.get("solution", "") or ""),
+                    "score": float(c.get("_final_score", 0.0) or 0.0),
+                    "l2_score": float(c["_l2_score"]) if c.get("_l2_score") is not None else None,
+                    "l3_score": float(c["_l3_score"]) if c.get("_l3_score") is not None else None,
+                    "l4_score": float(c["_l4_score"]) if c.get("_l4_score") is not None else None,
+                }
+                for c in rerank_result.cases[: max(1, top_k)]
+            ]
+        except Exception as exc:  # noqa: BLE001 - fail-open：召回异常返回空列表
+            logger.warning("retrieve_top_cases failed: %s", exc)
+            return []
+
     # ---------- 内部步骤 ----------
     @staticmethod
     def _build_query_text(event: StandardizedEvent) -> str:
