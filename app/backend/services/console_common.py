@@ -52,7 +52,9 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "embedding_api_key": "",
     "embedding_model": "",
     "feature_flags_json": '{"auto_diagnose":true,"dedup_scan":true}',
-    "default_role": "viewer",
+    # 未绑定角色用户的默认角色设为 sre：保证真实账号登录后可见三类 Agent 操作按钮（viewer 只读会全部隐藏）；
+    # 安全红线不变：default_role 校验禁止设为 sys_admin
+    "default_role": "sre",
     "role_bindings_json": '{"demo-operator@atoms.dev":"operator","demo-sre@atoms.dev":"sre","demo-lead@atoms.dev":"approver","demo-admin@atoms.dev":"sys_admin"}',
 }
 
