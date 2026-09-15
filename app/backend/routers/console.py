@@ -87,6 +87,10 @@ class ConfigUpdateBody(BaseModel):
     value: str
 
 
+class PatrolBody(BaseModel):
+    dry_run: bool = True
+
+
 # ------------------ 权限与 Dashboard ------------------
 
 @router.get("/permissions")
@@ -444,6 +448,26 @@ async def rollback_kb_case(
     db: AsyncSession = Depends(get_db),
 ):
     return await console_kb.rollback_case(db, current_user, case_id, body.version)
+
+
+@router.post("/kb/cases/{case_id}/archive")
+async def archive_kb_case(
+    case_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """归档知识案例：业务库归档 + 审计 + RAG 检索侧索引删除（生命周期闭环）。"""
+    return await console_kb.archive_case(db, current_user, case_id)
+
+
+@router.post("/kb/lifecycle-patrol")
+async def lifecycle_patrol(
+    body: PatrolBody,
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """知识生命周期巡检：负反馈/老化活跃案例归档淘汰（dry_run=true 仅返回候选预览）。"""
+    return await console_kb.run_lifecycle_patrol(db, current_user, body.dry_run)
 
 
 @router.get("/kb/cases/{case_id}/versions")

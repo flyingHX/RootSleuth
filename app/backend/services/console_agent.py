@@ -42,7 +42,7 @@ from services.console_ai import (
     run_diagnosis,
     score_case,
 )
-from services.console_common import get_config, now_iso, write_audit
+from services.console_common import get_config, mask_sensitive, now_iso, write_audit
 
 logger = logging.getLogger(__name__)
 
@@ -448,7 +448,7 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
                     {
                         "event_id": row.event_id,
                         "severity": row.severity,
-                        "log": row.raw_log,
+                        "log": mask_sensitive(row.raw_log),
                         "created_at": str(row.created_at) if row.created_at else None,
                     }
                 )
@@ -707,7 +707,8 @@ async def _cluster_recent_events(db: AsyncSession, time_window: str = "24h") -> 
         if created and (group["last_seen"] is None or created > group["last_seen"]):
             group["last_seen"] = created
         if group["sample_raw_log"] is None and event.raw_log:
-            group["sample_raw_log"] = event.raw_log
+            # 脱敏（评审 P0-6）：样本日志进入 LLM Prompt 与会话 result_json 前过滤敏感信息
+            group["sample_raw_log"] = mask_sensitive(event.raw_log)
 
     clusters = []
     for group in groups.values():
@@ -793,6 +794,11 @@ async def _draft_kb_cases(
     return drafts, str(payload.get("analysis") or "").strip()
 
 
+def _escape_like(value: str) -> str:
+    """转义 LIKE 通配符（评审 P0-5）：防止模板中的 %/_ 被解释为通配符导致误判。"""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def _template_case_exists(db: AsyncSession, template: str) -> bool:
     """同模板已有活跃案例或在途 create 变更集时返回 True（幂等保护）。"""
     if not template:
@@ -806,7 +812,7 @@ async def _template_case_exists(db: AsyncSession, template: str) -> bool:
         select(Kb_change_sets.id).where(
             Kb_change_sets.change_type == "create",
             Kb_change_sets.status == "pending",
-            Kb_change_sets.after_json.like(f"%{template}%"),
+            Kb_change_sets.after_json.like(f"%{_escape_like(template)}%", escape="\\"),
         ).limit(1)
     )
     return result.scalar_one_or_none() is not None
@@ -852,7 +858,47 @@ async def _auto_merge_proposal(db: AsyncSession, user: UserResponse) -> Dict[str
 async def run_kb_governance_agent(
     db: AsyncSession, user: UserResponse, time_window: str = "24h"
 ) -> Dict[str, Any]:
-    """知识治理 Agent：按时间窗聚类告警 → AI 起草案例（走审批）→ 合并提案。"""
+    """知识治理 Agent 外层兜底：任何未捕获异常落 status=failed 会话后返回 500。
+
+    评审 P0-4：此前数据库异常发生在会话落库之前，该次运行无 failed 记录、排障只能依赖后端日志；
+    现统一在会话边界兜底（先 rollback 复位事务，再落 failed 会话），保证每次运行可追溯。
+    """
+    if time_window not in WINDOW_DELTAS_HOURS:
+        raise HTTPException(status_code=400, detail="time_window 仅支持 1h / 24h / 7d")
+    actor = user.email or user.id
+    started = time.perf_counter()
+    try:
+        return await _run_kb_governance_agent_inner(db, user, time_window)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("KB governance agent failed: %s", exc)
+        error_message = f"{type(exc).__name__}: {exc}"[:500]
+        try:
+            await db.rollback()  # 复位可能处于失败状态的事务，确保 failed 会话可写入
+            await _save_session(
+                db,
+                session_type="kb_governance",
+                status="failed",
+                model="unknown",
+                event_id=None,
+                result={"time_window": time_window, "error": error_message},
+                trace=[],
+                iterations=0,
+                elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                actor=actor,
+                error_message=error_message,
+                summary=f"治理运行失败：{error_message}"[:300],
+            )
+        except Exception as save_exc:  # noqa: BLE001 - 兜底落库自身失败时仅记日志
+            logger.error("Failed to persist failed session: %s", save_exc)
+        raise HTTPException(status_code=500, detail=f"知识治理 Agent 运行失败：{error_message}")
+
+
+async def _run_kb_governance_agent_inner(
+    db: AsyncSession, user: UserResponse, time_window: str = "24h"
+) -> Dict[str, Any]:
+    """知识治理 Agent 主体：按时间窗聚类告警 → AI 起草案例（走审批）→ 合并提案。"""
     if time_window not in WINDOW_DELTAS_HOURS:
         raise HTTPException(status_code=400, detail="time_window 仅支持 1h / 24h / 7d")
     actor = user.email or user.id

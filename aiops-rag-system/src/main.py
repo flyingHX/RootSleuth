@@ -4,7 +4,7 @@ import threading
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
-from src.api import diagnostic, feedback, webhook
+from src.api import diagnostic, feedback, kb_sync, webhook
 from src.config import load_config
 from src.kafka_consumers import start_consumers
 from src.kafka_producer import KafkaProducerWrapper
@@ -18,6 +18,7 @@ app = FastAPI(title="AIOps RAG Knowledge Base", version="1.0.0")
 app.include_router(webhook.router, prefix="/api/v1")
 app.include_router(diagnostic.router, prefix="/api/v1")
 app.include_router(feedback.router, prefix="/api/v1")
+app.include_router(kb_sync.router, prefix="/api/v1")
 app.mount("/metrics", make_asgi_app())
 
 logger = get_logger(__name__)

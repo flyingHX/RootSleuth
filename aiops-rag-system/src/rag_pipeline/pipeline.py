@@ -297,3 +297,49 @@ class RAGPipeline:
         ok = self.milvus.upsert_case(case.to_milvus_row())
         logger.info("Write case %s (ok=%s, dedup=%s)", case_id, ok, bool(existing))
         return case_id
+
+    def upsert_console_case(self, fields: dict) -> str:
+        """控制台知识治理同步入口：按 case_id 直接 upsert 知识案例（无需 StandardizedEvent）。
+
+        与 write_case 的差异：write_case 以"事件关闭"为源头（fingerprint 去重），本方法以
+        "审批发布后的案例"为源头（case_id 为主键幂等），供发布/更新/回滚索引同步闭环使用。
+        Milvus 写入失败抛 RuntimeError（由 kb-sync API 转换为 503，控制台降级留痕）。
+        """
+        from ..models.case import KnowledgeCase
+
+        text_parts = [
+            fields.get("alert_template") or "",
+            fields.get("service_name") or "",
+            fields.get("error_type") or "",
+            fields.get("root_cause") or "",
+            fields.get("solution") or "",
+        ]
+        embedding = self.retriever.embed_query_text(" ".join(part for part in text_parts if part))
+        created_at = int(fields.get("created_at") or time.time() * 1000)
+        case = KnowledgeCase(
+            case_id=str(fields.get("case_id") or f"case_{time.strftime('%Y%m%d_%H%M%S')}"),
+            fingerprint=str(fields.get("fingerprint") or ""),
+            service_name=str(fields.get("service_name") or ""),
+            cluster=str(fields.get("cluster") or ""),
+            error_type=str(fields.get("error_type") or ""),
+            severity=int(fields.get("severity") or 2),
+            start_time=created_at,
+            feedback_score=int(fields.get("feedback_score") or 0),
+            upvotes=int(fields.get("upvotes") or 0),
+            downvotes=int(fields.get("downvotes") or 0),
+            hit_count=int(fields.get("hit_count") or 0),
+            recall_count=int(fields.get("recall_count") or 0),
+            root_cause=str(fields.get("root_cause") or "")[:2048],
+            solution=str(fields.get("solution") or "")[:2048],
+            alert_template=str(fields.get("alert_template") or "")[:1024],
+            topology_snapshot=(
+                str(fields.get("topology_snapshot")) if fields.get("topology_snapshot") else '{"upstream":[],"downstream":[]}'
+            )[:1024],
+            resolved_by=str(fields.get("resolved_by") or "console"),
+            embedding=embedding,
+            created_at=created_at,
+        )
+        if not self.milvus.upsert_case(case.to_milvus_row()):
+            raise RuntimeError("milvus_upsert_failed")
+        logger.info("Console sync upserted case %s", case.case_id)
+        return case.case_id

@@ -195,6 +195,34 @@ class MilvusClient:
             logger.error("Milvus query failed: %s", exc)
             return []
 
+    def query_by_case_id(self, case_id: str) -> List[dict]:
+        """按 case_id 精确查询索引行（供控制台发布后的检索验证与同步读改写）。"""
+        collection = self._collection()
+        if collection is None:
+            return []
+        try:
+            rows = collection.query(
+                expr=f'case_id == "{case_id}"',
+                output_fields=[
+                    "case_id",
+                    "service_name",
+                    "error_type",
+                    "alert_template",
+                    "feedback_score",
+                    "upvotes",
+                    "downvotes",
+                    "hit_count",
+                    "recall_count",
+                    "root_cause",
+                    "solution",
+                    "created_at",
+                ],
+            )
+            return list(rows)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Milvus query by case_id failed: %s", exc)
+            return []
+
     def upsert_case(self, row: dict) -> bool:
         collection = self._collection()
         if collection is None:

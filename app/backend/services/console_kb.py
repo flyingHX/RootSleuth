@@ -13,13 +13,13 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import yaml
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.approval_requests import Approval_requests
@@ -32,6 +32,7 @@ from models.kb_versions import Kb_versions
 from models.rule_versions import Rule_versions
 from models.unknown_templates import Unknown_templates
 from schemas.auth import UserResponse
+from services import rag_sync
 from services.console_common import (
     ROLE_LABELS,
     ROLE_LEVELS,
@@ -478,6 +479,8 @@ async def _publish_change_set(
         target_id=case.case_id,
         after={"version": case.version, "change_set_id": change_set.id, "approval_id": approval_request_id},
     )
+    # 索引同步闭环（评审 P0-1）：发布后 upsert Milvus 并回读验证，结果写审计 rag_index_sync
+    await rag_sync.sync_case_upsert(db, actor, case)
     return {"case_id": case.case_id, "version": case.version}
 
 
@@ -507,6 +510,9 @@ async def _apply_merge(db: AsyncSession, proposal: Kb_merge_proposals, actor: st
         target_id=master.case_id,
         after={"archived": archived, "proposal_id": proposal.id},
     )
+    if archived:
+        # 索引同步闭环（评审 P0-1）：被合并冗余案例从 Milvus 删除，避免僵尸知识继续被召回
+        await rag_sync.sync_cases_delete(db, actor, archived)
     return {"master": master.case_id, "archived": archived}
 
 
@@ -969,6 +975,8 @@ async def rollback_case(
         before={**before, "restored_from_version": version},
         after={"version": case.version},
     )
+    # 索引同步闭环（评审 P0-1）：回滚后以恢复版本内容覆盖 Milvus 索引
+    await rag_sync.sync_case_upsert(db, user.email or user.id, case)
     return ser_case(case)
 
 
@@ -978,6 +986,82 @@ async def list_case_versions(db: AsyncSession, case_id: str) -> List[Dict[str, A
         select(Kb_versions).where(Kb_versions.case_id == case_id).order_by(Kb_versions.version.desc())
     )
     return [ser_version(v) for v in result.scalars().all()]
+
+
+# ------------------ 知识生命周期（评审 P0-2：archive / expire） ------------------
+
+async def archive_case(db: AsyncSession, user: UserResponse, case_id: str) -> Dict[str, Any]:
+    """归档知识案例：status=archived + 审计 + Milvus 索引删除（检索侧立即不可见）。"""
+    await require_role(db, user, "kb_admin")
+    case = await _get_case(db, case_id)
+    if (case.status or "active") == "archived":
+        raise HTTPException(status_code=400, detail=f"案例 {case_id} 已是归档状态")
+    before_status = case.status
+    case.status = "archived"
+    await db.commit()
+    await write_audit(
+        db,
+        actor=user.email or user.id,
+        action="kb_archive",
+        target_type="kb_case",
+        target_id=case_id,
+        before={"status": before_status},
+        after={"status": "archived"},
+    )
+    await rag_sync.sync_cases_delete(db, user.email or user.id, [case_id])
+    return ser_case(case)
+
+
+async def run_lifecycle_patrol(db: AsyncSession, user: UserResponse, dry_run: bool = True) -> Dict[str, Any]:
+    """知识生命周期巡检：负反馈深度或「老化 + 负反馈」的活跃案例归档淘汰（支持 dry_run 预览）。
+
+    归档候选规则（命中其一）：
+    1. feedback_score <= -2：多条负反馈，知识已被确认无效；
+    2. updated_at 距今超过 kb_expire_days（配置中心，默认 90 天）且 feedback_score < 0：
+       长期未更新且从未获得正反馈的老化知识。
+    """
+    await require_role(db, user, "kb_admin")
+    expire_days = int(await get_config(db, "kb_expire_days", "90") or 90)
+    threshold = -2.0
+    cutoff = datetime.now(timezone.utc) - timedelta(days=expire_days)
+    result = await db.execute(
+        select(Kb_cases).where(
+            Kb_cases.status == "active",
+            or_(
+                Kb_cases.feedback_score <= threshold,
+                and_(Kb_cases.updated_at < cutoff, Kb_cases.feedback_score < 0),
+            ),
+        )
+    )
+    candidates = list(result.scalars().all())
+    preview = [
+        {
+            "case_id": c.case_id,
+            "feedback_score": c.feedback_score,
+            "updated_at": str(c.updated_at) if c.updated_at else None,
+        }
+        for c in candidates
+    ]
+    if dry_run:
+        return {"dry_run": True, "expire_days": expire_days, "candidates": preview, "archived": []}
+
+    archived_ids: List[str] = []
+    for case in candidates:
+        case.status = "archived"
+        archived_ids.append(case.case_id)
+        await write_audit(
+            db,
+            actor=user.email or user.id,
+            action="kb_archive",
+            target_type="kb_case",
+            target_id=case.case_id,
+            after={"status": "archived", "trigger": "lifecycle_patrol", "feedback_score": case.feedback_score},
+        )
+    if archived_ids:
+        await db.commit()
+        # 索引同步闭环：批量删除已淘汰案例的 Milvus 索引
+        await rag_sync.sync_cases_delete(db, user.email or user.id, archived_ids)
+    return {"dry_run": False, "expire_days": expire_days, "candidates": preview, "archived": archived_ids}
 
 
 async def scan_duplicates(db: AsyncSession) -> List[Dict[str, Any]]:
@@ -1246,6 +1330,8 @@ async def apply_feedback(
         before={"feedback_score": before_score, "event_id": event.id},
         after={"feedback_score": case.feedback_score, "rating": rating},
     )
+    # 反馈回流闭环（评审 P0-3）：👍/👎 双写 Milvus feedback_score/upvotes/downvotes，供 L2 重排 f4/f7 使用
+    await rag_sync.sync_feedback(db, user.email or user.id, case.case_id, 1 if rating == "up" else -1)
 
     change_set_result: Optional[Dict[str, Any]] = None
     fields = {k: v for k, v in correction.items() if k in ("root_cause", "solution") and v}

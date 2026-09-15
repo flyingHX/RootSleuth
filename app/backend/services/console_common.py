@@ -5,6 +5,7 @@ viewer(0) < operator(1) < sre(2) < approver(3) < kb_admin(4) < sys_admin(5)
 """
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -51,6 +52,8 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "embedding_base_url": "",
     "embedding_api_key": "",
     "embedding_model": "",
+    "rag_base_url": "",
+    "kb_expire_days": "90",
     "feature_flags_json": '{"auto_diagnose":true,"dedup_scan":true}',
     # 未绑定角色用户的默认角色设为 sre：保证真实账号登录后可见三类 Agent 操作按钮（viewer 只读会全部隐藏）；
     # 安全红线不变：default_role 校验禁止设为 sys_admin
@@ -72,6 +75,8 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "embedding_base_url": "Embedding Base URL（缺省回退 llm_base_url）",
     "embedding_api_key": "Embedding API Key（加密存储、脱敏展示；缺省回退 llm_api_key）",
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
+    "rag_base_url": "RAG 检索服务 Base URL（如 http://rag:8080；留空表示未部署，知识索引同步自动跳过）",
+    "kb_expire_days": "知识老化归档天数（生命周期巡检：老化且负反馈的活跃案例归档淘汰）",
     "feature_flags_json": "功能开关 JSON（auto_diagnose/dedup_scan 等）",
     "default_role": "未绑定角色用户的默认角色",
     "role_bindings_json": "角色绑定 JSON（email -> role）",
@@ -235,6 +240,29 @@ def build_diff(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
         if old_value != new_value:
             diff[key] = {"before": old_value, "after": new_value}
     return diff
+
+
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|authorization|credential)\b\s*[:=]\s*\S+"
+)
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]+")
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_LONG_TOKEN_RE = re.compile(r"\b[A-Za-z0-9+/=_.-]{32,}\b")
+
+
+def mask_sensitive(text: Optional[str]) -> Optional[str]:
+    """脱敏原始日志中的敏感信息（评审 P0-6）：密钥赋值 / Bearer / 邮箱 / 长令牌。
+
+    用于进入 LLM Prompt、Agent 会话 result_json 与审计展示的样本日志；
+    IP 与主机名保留（诊断与 CMDB 关联需要），仅过滤凭据类与个人敏感信息。
+    """
+    if not text:
+        return text
+    masked = _SENSITIVE_KEY_RE.sub(lambda m: f"{m.group(1)}=***", text)
+    masked = _BEARER_RE.sub("Bearer ***", masked)
+    masked = _EMAIL_RE.sub("***@***", masked)
+    masked = _LONG_TOKEN_RE.sub("***", masked)
+    return masked
 
 
 def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
