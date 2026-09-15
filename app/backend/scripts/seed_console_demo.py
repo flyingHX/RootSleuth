@@ -17,7 +17,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 
 from core.database import db_manager
 from models.Events import Events
@@ -442,6 +442,27 @@ MERGE_PROPOSALS = [
 
 # ---------------- 写入 ----------------
 
+# 种子行使用显式主键，不会推进 PostgreSQL id 序列；写入完成后统一重置，
+# 避免后续 ORM 插入（如 Agent 创建审批单/变更集）触发主键唯一冲突。
+SEQ_TABLES = (
+    "events", "kb_cases", "approval_requests", "approval_steps", "kb_change_sets",
+    "kb_versions", "kb_merge_proposals", "rule_versions", "unknown_templates",
+    "audit_logs", "console_configs",
+)
+
+
+async def _reset_id_sequences(db) -> None:
+    """将各业务表 id 序列推进到 MAX(id)+1（与 scripts/fix_sequences.py 同语义）。"""
+    for table in SEQ_TABLES:
+        await db.execute(
+            text(
+                f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "
+                f"GREATEST(COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, 1), false)"
+            )
+        )
+    await db.commit()
+
+
 async def main() -> None:
     async with db_manager.session() as db:
         # 清空业务表（保持稳定顺序）
@@ -559,6 +580,7 @@ async def main() -> None:
                               created_at=hours_ago(hrs), updated_at=hours_ago(hrs)))
 
         await db.commit()
+        await _reset_id_sequences(db)
 
         # 验证
         print("=== 种子数据写入完成 ===")
