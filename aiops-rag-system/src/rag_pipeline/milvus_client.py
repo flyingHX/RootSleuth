@@ -25,6 +25,7 @@ _SCHEMA_FIELDS = [
     ("alert_template", "VARCHAR", {"max_length": 1024}, {}),
     ("topology_snapshot", "VARCHAR", {"max_length": 1024}, {}),
     ("resolved_by", "VARCHAR", {"max_length": 64}, {}),
+    ("kb_version", "INT64", {}, {"default_value": 0}),
     ("embedding", "FLOAT_VECTOR", {"dim": 1024}, {}),
     ("created_at", "INT64", {}, {}),
 ]
@@ -45,6 +46,7 @@ class MilvusClient:
         self.collection_cache_ttl = float(config.get("collection_cache_ttl", 5))
         self._collection_obj = None
         self._collection_checked_at = 0.0
+        self._schema_names_cache = None  # (collection_obj, field_names)：旧集合缺失新字段时动态降级过滤
         self._connected = False
         self._connect()
 
@@ -87,6 +89,23 @@ class MilvusClient:
             self._collection_obj = None
             self._collection_checked_at = now
             return None
+
+    def _schema_field_names(self, collection) -> set:
+        """集合 Schema 字段名集合（按 collection 对象缓存）。
+
+        Schema 演进兼容：旧集合没有新增字段（如 kb_version）时，写入/查询前按交集
+        过滤，避免整行 upsert 或整条 query 因字段不存在而失败。
+        """
+        if self._schema_names_cache is not None and self._schema_names_cache[0] is collection:
+            return self._schema_names_cache[1]
+        names = {field.name for field in collection.schema.fields}
+        self._schema_names_cache = (collection, names)
+        return names
+
+    def _output_fields(self, collection, fields: List[str]) -> List[str]:
+        """按 Schema 交集过滤 output_fields（旧集合缺失字段动态剔除）。"""
+        names = self._schema_field_names(collection)
+        return [f for f in fields if f in names]
 
     def ensure_collection(self, overwrite: bool = False) -> bool:
         """创建集合、索引与近 3 个月分区；已存在时按需跳过。"""
@@ -201,22 +220,24 @@ class MilvusClient:
         if collection is None:
             return []
         try:
+            output_fields = self._output_fields(collection, [
+                "case_id",
+                "service_name",
+                "error_type",
+                "alert_template",
+                "feedback_score",
+                "upvotes",
+                "downvotes",
+                "hit_count",
+                "recall_count",
+                "root_cause",
+                "solution",
+                "kb_version",
+                "created_at",
+            ])
             rows = collection.query(
                 expr=f'case_id == "{case_id}"',
-                output_fields=[
-                    "case_id",
-                    "service_name",
-                    "error_type",
-                    "alert_template",
-                    "feedback_score",
-                    "upvotes",
-                    "downvotes",
-                    "hit_count",
-                    "recall_count",
-                    "root_cause",
-                    "solution",
-                    "created_at",
-                ],
+                output_fields=output_fields,
             )
             return list(rows)
         except Exception as exc:  # noqa: BLE001
@@ -228,8 +249,11 @@ class MilvusClient:
         if collection is None:
             return False
         try:
-            partition = self._ensure_partition(collection, row.get("created_at"))
-            collection.upsert([row], partition_name=partition)
+            # Schema 交集过滤：旧集合缺失新增字段（如 kb_version）时静默剔除，避免整行写入失败
+            field_names = self._schema_field_names(collection)
+            filtered = {k: v for k, v in row.items() if k in field_names}
+            partition = self._ensure_partition(collection, filtered.get("created_at"))
+            collection.upsert([filtered], partition_name=partition)
             collection.flush()
             return True
         except Exception as exc:  # noqa: BLE001
@@ -276,7 +300,7 @@ class MilvusClient:
             rows = list(
                 collection.query(
                     expr=f'case_id == "{case_id}"',
-                    output_fields=self._ALL_SCALAR_FIELDS,
+                    output_fields=self._output_fields(collection, self._ALL_SCALAR_FIELDS),
                 )
             )
             if not rows:

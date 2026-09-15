@@ -22,6 +22,8 @@ class KnowledgeCase(BaseModel):
     alert_template: str = ""
     topology_snapshot: str = '{"upstream":[],"downstream":[]}'
     resolved_by: str = "human"
+    # 知识版本号（发布/更新/回滚时递增；RAG 侧用于拒绝旧版本覆盖的版本守卫）
+    kb_version: int = 0
     embedding: Optional[List[float]] = None
     created_at: int = 0
 
@@ -53,6 +55,7 @@ class KnowledgeCase(BaseModel):
             "alert_template": self.alert_template[:1024],
             "topology_snapshot": self.topology_snapshot[:1024],
             "resolved_by": self.resolved_by,
+            "kb_version": self.kb_version,
             "embedding": self.embedding,
             "created_at": self.created_at,
         }

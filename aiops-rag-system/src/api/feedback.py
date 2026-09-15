@@ -1,4 +1,12 @@
-"""反馈评分与告警闭环接口：知识库自进化闭环的入口。"""
+"""反馈评分与告警闭环接口：知识库自进化闭环的入口。
+
+反馈幂等（补偿闭环增强）：
+- 控制台 👍/👎 同步携带 `idempotency_key`（补偿任务重试复用同一键）；
+- RAG 侧以 Redis SETNX 标记幂等键：重复提交直接返回当前分数，不重复加分；
+- Redis 不可用时 fail-open（放行执行），避免反馈丢失——可用性优先于精确去重。
+"""
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -14,6 +22,9 @@ router = APIRouter()
 class FeedbackRequest(BaseModel):
     case_id: str
     score: int = Field(description="+1 有用 / -1 没用")
+    idempotency_key: Optional[str] = Field(
+        default=None, description="幂等键：补偿重试复用同一键，防重复加分"
+    )
 
 
 class CaseCloseRequest(BaseModel):
@@ -25,10 +36,28 @@ class CaseCloseRequest(BaseModel):
 
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(req: FeedbackRequest):
-    """ChatOps 卡片 👍/👎 回调：更新 Milvus 中对应案例的 feedback_score。"""
+    """ChatOps 卡片 👍/👎 回调：更新 Milvus 中对应案例的 feedback_score（幂等去重）。"""
     if req.score not in (1, -1):
         raise HTTPException(status_code=422, detail="score must be +1 or -1")
-    new_score = get_pipeline().milvus.update_feedback(req.case_id, req.score)
+    pipeline = get_pipeline()
+
+    if req.idempotency_key:
+        try:
+            first_seen = get_redis().mark_feedback_once(req.idempotency_key)
+        except Exception as exc:  # noqa: BLE001 - 幂等探测失败 fail-open
+            logger.warning("Feedback idempotency probe failed (fail-open): %s", exc)
+            first_seen = True
+        if not first_seen:
+            # 重放/补偿重试：返回当前分数，不重复加分
+            rows = pipeline.milvus.query_by_case_id(req.case_id)
+            prev_score = int(rows[0].get("feedback_score", 0) or 0) if rows else 0
+            logger.info(
+                "Feedback deduplicated (key=%s, case=%s, score=%s)",
+                req.idempotency_key, req.case_id, prev_score,
+            )
+            return FeedbackResponse(status="success", case_id=req.case_id, feedback_score=prev_score)
+
+    new_score = pipeline.milvus.update_feedback(req.case_id, req.score)
     return FeedbackResponse(status="success", case_id=req.case_id, feedback_score=new_score)
 
 

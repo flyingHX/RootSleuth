@@ -379,6 +379,7 @@ class RAGPipeline:
                 str(fields.get("topology_snapshot")) if fields.get("topology_snapshot") else '{"upstream":[],"downstream":[]}'
             )[:1024],
             resolved_by=str(fields.get("resolved_by") or "console"),
+            kb_version=int(fields.get("kb_version") or 0),
             embedding=embedding,
             created_at=created_at,
         )
@@ -386,3 +387,15 @@ class RAGPipeline:
             raise RuntimeError("milvus_upsert_failed")
         logger.info("Console sync upserted case %s", case.case_id)
         return case.case_id
+
+    def set_cache_epoch_source(self, redis_client) -> None:
+        """注入 Redis 缓存 epoch 源（多实例语义缓存失效对账）；测试环境不注入则跳过对账。"""
+        self.embedder.set_epoch_source(redis_client)
+
+    def invalidate_case_cache(self, case_id: str = "") -> int:
+        """知识变更（发布/更新/回滚/归档/删除）后失效语义缓存，返回清空的缓存条目数。
+
+        与 kb_cache API、Redis Pub/Sub 广播订阅方共用同一入口，保证单实例与
+        多实例部署下的缓存一致性语义收敛在同一段实现上。
+        """
+        return self.embedder.invalidate(case_id=case_id)

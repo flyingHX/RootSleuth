@@ -54,6 +54,8 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "embedding_model": "",
     "rag_base_url": "",
     "kb_expire_days": "90",
+    "rag_sync_retry_base_seconds": "30",
+    "rag_sync_max_attempts": "5",
     "feature_flags_json": '{"auto_diagnose":true,"dedup_scan":true}',
     # 未绑定角色用户的默认角色设为 sre：保证真实账号登录后可见三类 Agent 操作按钮（viewer 只读会全部隐藏）；
     # 安全红线不变：default_role 校验禁止设为 sys_admin
@@ -80,6 +82,8 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "feature_flags_json": "功能开关 JSON（auto_diagnose/dedup_scan 等）",
     "default_role": "未绑定角色用户的默认角色",
     "role_bindings_json": "角色绑定 JSON（email -> role）",
+    "rag_sync_retry_base_seconds": "RAG 同步补偿重试基础间隔（秒，指数退避基数，1~3600）",
+    "rag_sync_max_attempts": "RAG 同步补偿最大尝试次数（超过进入死信，1~20）",
 }
 
 
@@ -323,6 +327,22 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
     if key == "embedding_model":
         if "****" in value:
             return False, "embedding_model 配置值无效"
+        return True, "ok"
+    if key == "rag_sync_retry_base_seconds":
+        try:
+            num = int(value)
+        except ValueError:
+            return False, "rag_sync_retry_base_seconds 必须是整数"
+        if not (1 <= num <= 3600):
+            return False, "rag_sync_retry_base_seconds 必须在 1~3600 之间"
+        return True, "ok"
+    if key == "rag_sync_max_attempts":
+        try:
+            num = int(value)
+        except ValueError:
+            return False, "rag_sync_max_attempts 必须是整数"
+        if not (1 <= num <= 20):
+            return False, "rag_sync_max_attempts 必须在 1~20 之间"
         return True, "ok"
     if key == "default_role":
         # 安全红线：默认角色不得设为 sys_admin，防止未绑定用户越权获得管理员能力

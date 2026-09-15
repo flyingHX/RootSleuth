@@ -4,7 +4,7 @@ import threading
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
-from src.api import diagnostic, feedback, kb_search, kb_sync, webhook
+from src.api import diagnostic, feedback, kb_cache, kb_search, kb_sync, webhook
 from src.config import load_config
 from src.kafka_consumers import start_consumers
 from src.kafka_producer import KafkaProducerWrapper
@@ -20,6 +20,7 @@ app.include_router(diagnostic.router, prefix="/api/v1")
 app.include_router(feedback.router, prefix="/api/v1")
 app.include_router(kb_search.router, prefix="/api/v1")
 app.include_router(kb_sync.router, prefix="/api/v1")
+app.include_router(kb_cache.router, prefix="/api/v1")
 app.mount("/metrics", make_asgi_app())
 
 logger = get_logger(__name__)
@@ -70,6 +71,13 @@ def startup():
     pipeline = RAGPipeline(config)
     redis_client = RedisClient(config["redis"]["url"])
     init_runtime(config, engine, producer, pipeline, redis_client)
+
+    # 语义缓存失效（多实例广播）：注入 epoch 对账源并订阅失效广播，
+    # 任一实例收到广播即清空本地 Embedding 缓存；Redis 不可用时静默降级为单实例语义。
+    pipeline.set_cache_epoch_source(redis_client)
+    redis_client.subscribe_cache_invalidate(
+        lambda case_id, reason: pipeline.invalidate_case_cache(case_id)
+    )
 
     threading.Thread(
         target=start_consumers, args=(config, pipeline), daemon=True, name="kafka-consumers"
