@@ -18,11 +18,13 @@ import {
   ConfidenceBadge,
   CopyButton,
   JsonPre,
+  QualityMetricsCard,
   SeverityBadge,
   SpinnerLine,
   StateGate,
   StatusBadge,
   fmtTime,
+  type QualityMetrics,
 } from '@/components/console/shared';
 import { usePermissions } from '@/components/console/ConsoleLayout';
 import { Badge } from '@/components/ui/badge';
@@ -54,7 +56,7 @@ const GOVERNANCE_WINDOWS = [
 ];
 
 /** 从持久化会话行还原深度诊断结果（进入页面时展示最近一次执行结果）。
- * 后端保存结构：result={"conclusion": {...}, "threshold": n}，模型/轮次/轨迹在会话列上。 */
+ * 后端保存结构：result={"conclusion": {...}, "threshold": n, "quality": {...}, "rag": {...}}，模型/轮次/轨迹在会话列上。 */
 function parseDiagnoseSession(session: AgentSession | null | undefined): AgentDiagnoseResult | null {
   if (!session) return null;
   const r = (session.result ?? {}) as Record<string, unknown>;
@@ -79,6 +81,9 @@ function parseDiagnoseSession(session: AgentSession | null | undefined): AgentDi
         low_confidence: Boolean(c.low_confidence),
         threshold: typeof r.threshold === 'number' ? r.threshold : undefined,
       },
+      quality: (r.quality ?? null) as QualityMetrics | null,
+      rag: (r.rag ?? null) as NonNullable<AgentDiagnoseResult['agent']>['rag'],
+      usage: (r.usage ?? null) as Record<string, unknown> | null,
     },
   };
 }
@@ -231,6 +236,9 @@ function DiagnoseTab() {
                 <Badge variant="outline">{result.agent.iterations} 轮推理</Badge>
                 <Badge variant="outline">{Math.round(result.agent.duration_ms)} ms</Badge>
                 <Badge variant="outline">{result.agent.tool_trace.length} 次工具调用</Badge>
+                {result.agent.rag?.kb_search_used && (
+                  <Badge variant="outline">知识库召回 {result.agent.rag.case_count ?? 0} 条案例</Badge>
+                )}
               </>
             )}
             <span className="text-muted-foreground">{result.message}</span>
@@ -243,6 +251,7 @@ function DiagnoseTab() {
                   <CardTitle className="text-sm">Agent 结论</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
+                  <QualityMetricsCard quality={result.agent.quality} title="Agent 诊断质量评估" />
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">置信度</span>
                     <ConfidenceBadge

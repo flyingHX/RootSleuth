@@ -27,6 +27,7 @@ from models.kb_cases import Kb_cases
 from schemas.aihub import ChatMessage
 from services import llm_runtime
 from services.console_common import get_config, write_audit, now_iso
+from services.quality_scan import evaluate_diagnosis_quality
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,7 @@ def _apply_rag_fields(
 
 async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str, Any]:
     """执行完整诊断闭环。AI 失败时持久化降级原因并抛出可重试错误。"""
+    total_started = time.perf_counter()
     result = await db.execute(select(Events).where(Events.id == event_id))
     event = result.scalar_one_or_none()
     if event is None:
@@ -246,6 +248,8 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
             "message": "知识库中没有相似案例，已记录为未知告警，可先补充知识案例或晋升规则。",
             "event_id": event.id,
             "rag": {"status": _UNKNOWN_RAG_STATUS, "score": None, "ms": round(rag_ms, 2), "candidates": []},
+            "quality": None,
+            "elapsed_ms": int((time.perf_counter() - total_started) * 1000),
             "diagnosis": None,
         }
 
@@ -308,10 +312,20 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
         raise HTTPException(status_code=502, detail=f"AI 诊断输出校验失败（{last_error}），请点击重试")
 
     threshold = float(await get_config(db, "confidence_threshold", "0.75") or 0.75)
+    # 单次诊断质量指标（在线评估，前端逐次展示 + 总览聚合的数据来源）
+    quality = evaluate_diagnosis_quality(
+        {
+            "template": event.template or "",
+            "error_type": event.error_type or "",
+            "service_name": event.service_name or "",
+        },
+        f"{diagnosis['root_cause']}\n{diagnosis['solution']}",
+        candidates,
+    )
     event.ai_root_cause = diagnosis["root_cause"]
     event.ai_solution = diagnosis["solution"]
     event.ai_command = diagnosis.get("command") or None
-    event.ai_output_json = json.dumps(diagnosis, ensure_ascii=False)
+    event.ai_output_json = json.dumps({**diagnosis, "quality": quality}, ensure_ascii=False)
     event.confidence = diagnosis["confidence"]
     event.status = "diagnosed"
     if diagnosis["confidence"] < threshold:
@@ -320,6 +334,7 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
         event.degraded_reason = None
     await db.commit()
 
+    elapsed_ms = int((time.perf_counter() - total_started) * 1000)
     await write_audit(
         db,
         actor=actor,
@@ -332,6 +347,9 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
             "embedding_boost": bool(embedding_meta),
             "confidence": diagnosis["confidence"],
             "low_confidence": diagnosis["confidence"] < threshold,
+            "trust_index": quality["trust_index"],
+            "quality_ok": quality["quality_ok"],
+            "elapsed_ms": elapsed_ms,
         },
     )
 
@@ -345,7 +363,13 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
             "ms": round(rag_ms, 2),
             "candidates": candidates,
             "embedding": embedding_meta,
+            "rerank": {
+                "strategy": "business_signals+embedding_boost" if embedding_meta else "business_signals",
+                "candidate_count": len(candidates),
+            },
         },
+        "quality": quality,
+        "elapsed_ms": elapsed_ms,
         "diagnosis": {
             **diagnosis,
             "model": model_name,

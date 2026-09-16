@@ -1,8 +1,8 @@
 /** C3 运营总览：核心指标、告警分布、TOP 榜、依赖健康与待办。 */
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { ArrowRight, BellRing, BookOpenText, ClipboardCheck } from 'lucide-react';
-import { consoleApi, errDetail } from '@/lib/console-api';
+import { ArrowRight, BellRing, BookOpenText, ClipboardCheck, HeartPulse } from 'lucide-react';
+import { consoleApi, errDetail, type DashboardData } from '@/lib/console-api';
 import { ErrorBlock, SeverityBadge, StateGate, fmtPercent, fmtTime } from '@/components/console/shared';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -41,6 +41,66 @@ function MetricStrip({ metrics }: { metrics: NonNullable<ReturnType<typeof useDa
           >
             <span className="text-xs text-muted-foreground">{item.label}</span>
             <span className="text-2xl font-semibold tracking-tight">{item.value}</span>
+            <span className="text-xs text-muted-foreground/80">{item.hint}</span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** 诊断质量态势：Trust Index、质量达标率、幻觉率、生成/检索成功率与内容安全（投毒拦截）统计。 */
+function QualityStrip({ quality }: { quality: DashboardData['quality'] }) {
+  const items = [
+    {
+      label: 'Trust Index',
+      value: quality.trust_index_avg !== null ? quality.trust_index_avg.toFixed(3) : '—',
+      hint: `近 ${quality.sample_count} 次诊断样本`,
+    },
+    {
+      label: '质量达标率',
+      value: quality.quality_ok_rate !== null ? fmtPercent(quality.quality_ok_rate) : '—',
+      hint: '五项质量指标全达标占比',
+    },
+    {
+      label: '幻觉率',
+      value: quality.hallucination_rate_avg !== null ? fmtPercent(quality.hallucination_rate_avg) : '—',
+      hint: '诊断结论幻觉占比（越低越好）',
+    },
+    {
+      label: '生成成功率',
+      value: quality.generation.success_rate !== null ? fmtPercent(quality.generation.success_rate) : '—',
+      hint: `LLM 成功 ${quality.generation.success} / 失败 ${quality.generation.fail}`,
+    },
+    {
+      label: '检索成功率',
+      value: quality.retrieval.success_rate !== null ? fmtPercent(quality.retrieval.success_rate) : '—',
+      hint: `P99 ${quality.retrieval.p99_ms !== null ? `${quality.retrieval.p99_ms.toFixed(0)} ms` : '—'}`,
+    },
+    {
+      label: '投毒拦截',
+      value: String(quality.content_safety.blocked),
+      hint: `内容扫描 ${quality.content_safety.scans} 次 · 误报申诉放行 ${quality.content_safety.overrides}`,
+    },
+  ];
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">诊断质量态势</CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 gap-y-5 px-6 py-5 sm:grid-cols-3 lg:grid-cols-6">
+        {items.map((item, idx) => (
+          <div
+            key={item.label}
+            className={cn(
+              'flex flex-col gap-1',
+              idx > 0 && 'lg:border-l lg:pl-5',
+              idx === 2 && 'sm:border-l sm:pl-5',
+              idx === 4 && 'sm:border-l sm:pl-5',
+            )}
+          >
+            <span className="text-xs text-muted-foreground">{item.label}</span>
+            <span className="text-xl font-semibold tracking-tight">{item.value}</span>
             <span className="text-xs text-muted-foreground/80">{item.hint}</span>
           </div>
         ))}
@@ -108,6 +168,7 @@ export default function Index() {
   return (
     <div className="space-y-5">
       <MetricStrip metrics={data.metrics} />
+      <QualityStrip quality={data.quality} />
 
       <div className="grid items-start gap-5 lg:grid-cols-3">
         {/* 左列：分布与 TOP 榜 */}
@@ -235,6 +296,50 @@ export default function Index() {
                 <BookOpenText className="h-3.5 w-3.5" />
                 管理知识库
               </Link>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+              <CardTitle className="text-base">知识健康</CardTitle>
+              <Link to="/ops" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                健康报表
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <p className="text-xl font-semibold text-teal-600 dark:text-teal-400">{data.kb_health.green}</p>
+                  <p className="text-xs text-muted-foreground">健康</p>
+                </div>
+                <div>
+                  <p className="text-xl font-semibold text-amber-600 dark:text-amber-400">{data.kb_health.yellow}</p>
+                  <p className="text-xs text-muted-foreground">关注</p>
+                </div>
+                <div>
+                  <p className="text-xl font-semibold text-red-600 dark:text-red-400">{data.kb_health.red}</p>
+                  <p className="text-xs text-muted-foreground">风险</p>
+                </div>
+              </div>
+              <div className="mt-4 space-y-1.5">
+                <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+                  {data.kb_health.total > 0 && (
+                    <>
+                      <span className="bg-teal-500" style={{ width: `${(data.kb_health.green / data.kb_health.total) * 100}%` }} />
+                      <span className="bg-amber-500" style={{ width: `${(data.kb_health.yellow / data.kb_health.total) * 100}%` }} />
+                      <span className="bg-red-500" style={{ width: `${(data.kb_health.red / data.kb_health.total) * 100}%` }} />
+                    </>
+                  )}
+                </div>
+                <p className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span className="inline-flex items-center gap-1">
+                    <HeartPulse className="h-3 w-3" />
+                    健康率 {data.kb_health.health_rate !== null ? fmtPercent(data.kb_health.health_rate) : '—'}
+                  </span>
+                  <span>共 {data.kb_health.total} 个案例</span>
+                </p>
+              </div>
             </CardContent>
           </Card>
 

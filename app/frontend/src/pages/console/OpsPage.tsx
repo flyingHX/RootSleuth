@@ -8,9 +8,10 @@ import {
   errDetail,
   type AuditLog,
   type ConfigItem,
+  type KbHealthReport,
   type LlmTestResult,
 } from '@/lib/console-api';
-import { EmptyBlock, JsonPre, LoadingBlock, StateGate, fmtTime } from '@/components/console/shared';
+import { EmptyBlock, JsonPre, LoadingBlock, StateGate, fmtPercent, fmtTime } from '@/components/console/shared';
 import { usePermissions } from '@/components/console/ConsoleLayout';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -123,6 +124,247 @@ function AuditTab() {
           </CardContent>
         </Card>
       </StateGate>
+    </div>
+  );
+}
+
+// ---------------- 知识健康报表（P2-1：红黄绿分级 + 同步闭环 + 内容安全 + 老化） ----------------
+
+const HEALTH_TONE: Record<'green' | 'yellow' | 'red', { label: string; badge: string }> = {
+  green: { label: '健康', badge: 'border-teal-500/30 bg-teal-500/15 text-teal-700 dark:text-teal-400' },
+  yellow: { label: '关注', badge: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400' },
+  red: { label: '风险', badge: 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-400' },
+};
+
+function HealthBadge({ level }: { level: 'green' | 'yellow' | 'red' }) {
+  const tone = HEALTH_TONE[level] ?? HEALTH_TONE.green;
+  return (
+    <Badge variant="outline" className={cn('text-[10px]', tone.badge)}>
+      {tone.label}
+    </Badge>
+  );
+}
+
+function StatItem({ label, value, tone }: { label: string; value: string | number; tone?: string }) {
+  return (
+    <div className="text-center">
+      <p className={cn('text-xl font-semibold', tone)}>{value}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+/** 诊断质量态势（Ops 治理视图）：复用 Dashboard 聚合（同查询缓存），展示 Trust Index 与生成/检索成功率。 */
+function QualityOverviewCard() {
+  const { data } = useQuery({
+    queryKey: ['dashboard'],
+    queryFn: () => consoleApi.getDashboard(),
+    staleTime: 30_000,
+  });
+  const q = data?.quality;
+  const fmt = (v: number | null | undefined, f: (n: number) => string) => (typeof v === 'number' ? f(v) : '—');
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm">诊断质量态势</CardTitle>
+      </CardHeader>
+      <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <StatItem label="Trust Index" value={fmt(q?.trust_index_avg, (n) => n.toFixed(3))} />
+        <StatItem label="质量达标率" value={fmt(q?.quality_ok_rate, fmtPercent)} />
+        <StatItem label="检索成功率" value={fmt(q?.retrieval?.success_rate, fmtPercent)} />
+        <StatItem label="生成成功率" value={fmt(q?.generation?.success_rate, fmtPercent)} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function KbHealthTab() {
+  const query = useQuery({
+    queryKey: ['kb-health'],
+    queryFn: () => consoleApi.getKbHealth(),
+    refetchInterval: 60_000,
+  });
+
+  if (query.isLoading) return <LoadingBlock rows={6} />;
+  if (query.isError || !query.data) {
+    return <EmptyBlock title="健康报表加载失败" hint={errDetail(query.error)} />;
+  }
+
+  const report: KbHealthReport = query.data;
+  const { summary, sync, content_safety, aging } = report;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-muted-foreground">
+        红黄绿健康度口径：绿=verify 确认且无风险；黄=同步未确认 / 超老化阈值 / 负反馈 / PII 标记放行；
+        红=同步死信 / 高风险内容（含误报放行留痕）/ 反馈分 ≤ -2 / 超无条件老化阈值。
+      </p>
+      <QualityOverviewCard />
+      <div className="grid gap-4 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">红黄绿分级</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5">
+            <div className="grid grid-cols-3 gap-2">
+              <StatItem label="健康" value={summary.green} tone="text-teal-600 dark:text-teal-400" />
+              <StatItem label="关注" value={summary.yellow} tone="text-amber-600 dark:text-amber-400" />
+              <StatItem label="风险" value={summary.red} tone="text-red-600 dark:text-red-400" />
+            </div>
+            <div className="flex h-2 overflow-hidden rounded-full bg-muted">
+              {summary.total > 0 && (
+                <>
+                  <span className="bg-teal-500" style={{ width: `${(summary.green / summary.total) * 100}%` }} />
+                  <span className="bg-amber-500" style={{ width: `${(summary.yellow / summary.total) * 100}%` }} />
+                  <span className="bg-red-500" style={{ width: `${(summary.red / summary.total) * 100}%` }} />
+                </>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              健康率 {summary.health_rate !== null ? fmtPercent(summary.health_rate) : '—'} · 案例 {summary.total} 个
+              （active {summary.active} / archived {summary.archived}）
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">同步闭环</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <StatItem label="已确认" value={sync.verified_cases} tone="text-teal-600 dark:text-teal-400" />
+              <StatItem label="未确认" value={sync.unverified_cases} tone="text-amber-600 dark:text-amber-400" />
+              <StatItem label="待重试任务" value={sync.pending_tasks} />
+              <StatItem
+                label="死信任务"
+                value={sync.dead_tasks}
+                tone={sync.dead_tasks > 0 ? 'text-red-600 dark:text-red-400' : undefined}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              发布后 upsert+verify 闭环状态；死信表示索引可能缺失对应知识，需人工重放。
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">内容安全</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <StatItem label="扫描次数" value={content_safety.scans} />
+              <StatItem
+                label="拦截"
+                value={content_safety.blocked}
+                tone={content_safety.blocked > 0 ? 'text-red-600 dark:text-red-400' : undefined}
+              />
+              <StatItem label="标记放行" value={content_safety.flagged} />
+              <StatItem label="误报申诉" value={content_safety.overrides} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              规则版本 {content_safety.last_rule_version ?? '—'}；高风险命中默认拦截，人工申诉后留痕放行。
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">老化治理</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <StatItem label="待老化案例" value={aging.stale_candidates} />
+              <StatItem label="平均年龄" value={aging.avg_age_days !== null ? `${aging.avg_age_days} 天` : '—'} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              阈值 {report.expire_days} 天（无条件 {report.unconditional_expire_days} 天）
+              {aging.oldest?.age_days !== null && aging.oldest
+                ? `；最老案例 ${aging.oldest.case_id}（${aging.oldest.age_days} 天）`
+                : ''}
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm">风险案例清单（红 / 黄）</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {report.risk_cases.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              全部知识案例健康，无红 / 黄分级案例。
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[880px] text-left text-xs">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="py-2 pr-3 font-medium">健康度</th>
+                    <th className="py-2 pr-3 font-medium">案例</th>
+                    <th className="py-2 pr-3 font-medium">服务 / 错误类型</th>
+                    <th className="py-2 pr-3 font-medium">状态 / 版本</th>
+                    <th className="py-2 pr-3 font-medium">反馈分</th>
+                    <th className="py-2 pr-3 font-medium">年龄</th>
+                    <th className="py-2 pr-3 font-medium">同步</th>
+                    <th className="py-2 pr-3 font-medium">内容风险</th>
+                    <th className="py-2 font-medium">命中原因</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {report.risk_cases.map((c) => (
+                    <tr key={c.case_id} className="align-top">
+                      <td className="py-2.5 pr-3">
+                        <HealthBadge level={c.health} />
+                      </td>
+                      <td className="py-2.5 pr-3 font-mono">{c.case_id}</td>
+                      <td className="py-2.5 pr-3">
+                        {c.service_name}
+                        <span className="block text-muted-foreground">{c.error_type}</span>
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        {c.status} <span className="text-muted-foreground">v{c.version ?? 0}</span>
+                      </td>
+                      <td className="py-2.5 pr-3">{c.feedback_score ?? '—'}</td>
+                      <td className="py-2.5 pr-3">{c.age_days !== null ? `${c.age_days} 天` : '—'}</td>
+                      <td className="py-2.5 pr-3">
+                        {c.sync_dead > 0 ? (
+                          <span className="text-red-600 dark:text-red-400">死信 {c.sync_dead}</span>
+                        ) : c.sync_pending > 0 ? (
+                          <span className="text-amber-600 dark:text-amber-400">待重试 {c.sync_pending}</span>
+                        ) : c.sync_verified ? (
+                          <span className="text-teal-600 dark:text-teal-400">已确认</span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-400">未确认</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-3">
+                        {c.content_risk && c.content_risk !== 'none' ? (
+                          <Badge variant="outline" className="text-[10px]">
+                            {c.content_risk}
+                            {c.rule_version ? ` · ${c.rule_version}` : ''}
+                          </Badge>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-2.5">
+                        <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+                          {c.reasons.map((r) => (
+                            <li key={r}>{r}</li>
+                          ))}
+                        </ul>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -436,10 +678,14 @@ export default function OpsPage() {
       <Tabs defaultValue="audit">
         <TabsList>
           <TabsTrigger value="audit">审计日志</TabsTrigger>
+          <TabsTrigger value="kb-health">知识健康报表</TabsTrigger>
           {canManageConfig && <TabsTrigger value="config">配置中心</TabsTrigger>}
         </TabsList>
         <TabsContent value="audit" className="mt-4">
           <AuditTab />
+        </TabsContent>
+        <TabsContent value="kb-health" className="mt-4">
+          <KbHealthTab />
         </TabsContent>
         {canManageConfig && (
           <TabsContent value="config" className="mt-4">

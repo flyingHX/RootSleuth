@@ -14,6 +14,7 @@ import {
   type UnknownTemplate,
 } from '@/lib/console-api';
 import {
+  ContentScanCard,
   DiffTable,
   EmptyBlock,
   ErrorBlock,
@@ -183,6 +184,12 @@ function ApprovalContentSection({ requestId }: { requestId: number }) {
           <span className="text-muted-foreground">{cs.created_by}</span>
         </div>
         {cs.reason && <p className="text-xs text-muted-foreground">变更理由：{cs.reason}</p>}
+        {cs.content_scan && (
+          <ContentScanCard
+            scan={cs.content_scan}
+            title={cs.content_scan.override ? '内容安全扫描（人工误报放行）' : '内容安全扫描'}
+          />
+        )}
         {entries.length > 0 ? (
           <DiffTable entries={entries} />
         ) : (

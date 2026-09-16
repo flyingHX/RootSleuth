@@ -28,6 +28,7 @@ class KBSearchRequest(BaseModel):
     error_type: str = ""
     template: str = ""
     cluster: str = ""
+    environment: str = Field(default="", description="部署环境（P0-2 环境隔离过滤；空=不过滤）")
     top_k: int = Field(default=5, ge=1, le=10)
 
 
@@ -45,6 +46,7 @@ def kb_search(req: KBSearchRequest, identity: ServiceIdentity = Depends(require_
         "cluster": req.cluster or "",
         "error_type": req.error_type or "",
         "template": req.template or "",
+        "environment": (req.environment or "").strip() or None,
         "timestamp": int(time.time() * 1000),
     }
     cases = get_pipeline_tenant_safe(req, event, identity)

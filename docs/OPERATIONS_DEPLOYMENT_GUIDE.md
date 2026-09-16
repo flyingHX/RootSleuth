@@ -92,6 +92,25 @@ python scripts/fix_sequences.py
 
 认证相关密钥由 Atoms 平台注入（OIDC/JWKS），无需手工配置；AI 能力走内置 AIHub，无需自备 API Key。
 
+### 6.1 RAG 流水线环境变量（/workspace/aiops-rag-system）
+
+RAG 服务为独立进程（经 `src/config.py` 读取环境变量），完整模板见 `aiops-rag-system/.env.example`。与服务间鉴权、多租户隔离相关的核心项（P0）：
+
+| 变量 | 说明 |
+|------|------|
+| `RAG_AUTH_ENABLED` | 鉴权总开关；`false` 或未配置任何 Key 时鉴权关闭（存量部署兼容，匿名按 default 租户放行） |
+| `RAG_API_KEYS_JSON` | Key → `{name, tenant_id, scopes}` 映射 JSON（支持简写 `{"<key>": "console"}`）。`read`=检索/验证/观测（kb-search、kb-sync/verify、kb-cache/status、diagnostic）；`write`=kb-sync upsert/delete、kb-cache/invalidate、feedback、cases/close。配置后未携带/错误 Key → 401，缺 scope → 403 |
+| `RAG_DEFAULT_TENANT` | 身份缺省租户（默认 `default`）。`default` 为公共知识层：租户 t 可见 `{default, t}`，非 default 租户互相不可见 → 跨租户越权召回率 0% |
+| `LLM_API_KEY` / `EMBEDDING_API_KEY` | LLM 与 Embedding 凭证，走平台密钥管理注入 |
+
+生产要求：`RAG_AUTH_ENABLED=true` 并按最小 scope 配置 Key；控制台后端经 `rag_api_key` 配置以 `X-API-Key` 头透传调用 RAG（见 `app/backend/services/rag_sync.py`、`console_agent.py`）；`/api/v1/webhook` 保持免鉴权契约。验证方式：
+
+```bash
+# 未携带 Key 应 401；错误 Key 应 401；缺 write scope 的 Key 调写接口应 403
+curl -i http://localhost:8080/api/v1/kb-search -X POST -H 'Content-Type: application/json' -d '{}'
+curl -i -H "X-API-Key: <console-key>" http://localhost:8080/api/v1/kb-sync/verify/E2E-CASE-1
+```
+
 ## 7. 健康检查与验证
 
 ```bash

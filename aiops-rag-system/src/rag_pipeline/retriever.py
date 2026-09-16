@@ -19,7 +19,7 @@ from langchain_core.retrievers import BaseRetriever
 
 from ..models.event import StandardizedEvent
 from ..utils.logger import get_logger
-from ..utils.tenant import tenant_expr
+from ..utils.tenant import environment_expr, tenant_expr
 
 logger = get_logger(__name__)
 
@@ -28,8 +28,14 @@ OUTPUT_FIELDS = [
     "case_id", "fingerprint", "service_name", "cluster", "error_type",
     "severity", "start_time", "feedback_score", "upvotes", "downvotes",
     "hit_count", "recall_count", "root_cause", "solution", "alert_template",
-    "topology_snapshot", "resolved_by", "kb_version", "tenant_id", "created_at",
+    "topology_snapshot", "resolved_by", "kb_version", "tenant_id",
+    "environment", "created_at",
 ]
+
+
+def _q(value: str) -> str:
+    """Milvus 表达式字符串转义：剔除内嵌引号与反斜杠（P0-2）。"""
+    return str(value or "").replace('"', "").replace("\\", "")
 
 
 class AtomsEmbeddings(Embeddings):
@@ -86,14 +92,19 @@ class MilvusEventRetriever(BaseRetriever):
     ) -> str:
         since = event.timestamp - self.recent_window_days * 24 * 3600 * 1000
         expr = (
-            f'service_name == "{event.service_name}" and '
-            f'error_type == "{event.error_type}" and '
+            f'service_name == "{_q(event.service_name)}" and '
+            f'error_type == "{_q(event.error_type)}" and '
             f"start_time > {since}"
         )
         # 租户隔离（P0-2）：仅当集合 Schema 已具备 tenant_id 字段时追加过滤表达式，
         # 旧集合自动跳过（has_field 探测失败视为不支持，保持存量召回兼容）
         if tenant_id and self.milvus_client.has_field("tenant_id"):
             expr += f" and {tenant_expr(tenant_id)}"
+        # 环境隔离（P0-2）：事件显式携带 environment 时按环境过滤（含空环境公共层），
+        # 未携带时不过滤（存量调用兼容）
+        environment = (event.environment or "").strip()
+        if environment and self.milvus_client.has_field("environment"):
+            expr += f" and {environment_expr(environment)}"
         return expr
 
     def _search_rows(

@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import {
   consoleApi,
   errDetail,
+  extractContentGuardScan,
   type ChangeSet,
   type EventSample,
   type KbCase,
@@ -14,6 +15,7 @@ import {
   type MergeProposal,
 } from '@/lib/console-api';
 import {
+  ContentScanCard,
   DiffTable,
   EmptyBlock,
   SeverityBadge,
@@ -22,6 +24,7 @@ import {
   StatusBadge,
   diffEntries,
   fmtTime,
+  type ContentScanResult,
   type DiffEntry,
 } from '@/components/console/shared';
 import { usePermissions } from '@/components/console/ConsoleLayout';
@@ -105,6 +108,50 @@ function EventSampleList({
 
 // ------------------ 编辑 / 新建对话框 ------------------
 
+/** 内容安全误报放行交互：展示拦截扫描结果并收集放行理由（写入审计日志）。 */
+function OverrideBlock({ scan, idPrefix, allow, onAllow, reason, onReason }: {
+  scan: ContentScanResult;
+  idPrefix: string;
+  allow: boolean;
+  onAllow: (v: boolean) => void;
+  reason: string;
+  onReason: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-2.5">
+      <ContentScanCard scan={scan} title="内容安全扫描（已拦截）" />
+      <div className="rounded-md border bg-secondary/40 p-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          高风险命中（密钥、私钥、危险命令、注入等）会阻止发布。若确认属于误报（例如演练样本、脱敏演示数据），
+          请填写放行理由后重新提交；放行操作与理由将写入审计日志供事后追溯。
+        </p>
+        <RadioGroup
+          className="mt-2.5 flex flex-wrap gap-4"
+          value={allow ? 'override' : 'blocked'}
+          onValueChange={(v) => onAllow(v === 'override')}
+        >
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="blocked" id={`${idPrefix}-keep-blocked`} />
+            <Label htmlFor={`${idPrefix}-keep-blocked`} className="text-xs">保持拦截，稍后修改内容</Label>
+          </div>
+          <div className="flex items-center space-x-2">
+            <RadioGroupItem value="override" id={`${idPrefix}-allow-override`} />
+            <Label htmlFor={`${idPrefix}-allow-override`} className="text-xs">确认为误报，放行提交</Label>
+          </div>
+        </RadioGroup>
+        {allow && (
+          <Input
+            className="mt-2.5 h-9 text-xs"
+            placeholder="放行理由（必填，写入审计），例如：根因中的 Token 为演练样本"
+            value={reason}
+            onChange={(e) => onReason(e.target.value)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: () => void }) {
   const queryClient = useQueryClient();
   const perms = usePermissions();
@@ -113,6 +160,10 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
     Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, (detail.case as unknown as Record<string, string>)[f] ?? ''])),
   );
   const [reason, setReason] = useState('');
+  // 内容安全拦截后的误报放行状态：扫描结果、是否放行、放行理由
+  const [guardScan, setGuardScan] = useState<ContentScanResult | null>(null);
+  const [allowOverride, setAllowOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
 
   const changedEntries: DiffEntry[] = EDITABLE_FIELDS.filter((f) => form[f] !== ((detail.case as unknown as Record<string, string>)[f] ?? '')).map(
     (f) => ({
@@ -132,8 +183,12 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
             .map((f) => [f, form[f]]),
         ),
         reason,
+        ...(allowOverride ? { allow_override: true, override_reason: overrideReason.trim() } : {}),
       }),
     onSuccess: (res) => {
+      if (res.content_scan && res.content_scan.hits.length > 0) {
+        toast.info(`变更已提交，内容安全扫描命中 ${res.content_scan.hits.length} 处（${res.content_scan.risk_level === 'high' ? '已误报放行' : '低风险留痕'}），明细见审批单`);
+      }
       toast.success(
         res.auto_published
           ? `变更已发布，案例 ${detail.case.case_id} 更新到 v${res.change_set.version}`
@@ -145,10 +200,25 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       onClose();
     },
-    onError: (e) => toast.error(`提交变更失败：${errDetail(e)}`),
+    onError: (e) => {
+      const scan = extractContentGuardScan(e);
+      if (scan) {
+        setGuardScan(scan);
+        setAllowOverride(false);
+        setOverrideReason('');
+        toast.error('内容安全扫描已拦截本次变更，请确认是否误报放行', { duration: 8000 });
+      } else {
+        toast.error(`提交变更失败：${errDetail(e)}`);
+      }
+    },
   });
 
-  const disabled = mutation.isPending || !reason.trim() || changedEntries.length === 0 || !perms?.can_edit_kb;
+  const disabled =
+    mutation.isPending ||
+    !reason.trim() ||
+    changedEntries.length === 0 ||
+    !perms?.can_edit_kb ||
+    (guardScan !== null && allowOverride && !overrideReason.trim());
 
   return (
     <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
@@ -192,12 +262,22 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
             <DiffTable entries={changedEntries} />
           </div>
         )}
+        {guardScan && (
+          <OverrideBlock
+            scan={guardScan}
+            idPrefix="kb-edit-override"
+            allow={allowOverride}
+            onAllow={setAllowOverride}
+            reason={overrideReason}
+            onReason={setOverrideReason}
+          />
+        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>取消</Button>
         <Button onClick={() => mutation.mutate()} disabled={disabled}>
           <PencilLine className="mr-1.5 h-3.5 w-3.5" />
-          {mutation.isPending ? '提交中…' : '提交变更'}
+          {mutation.isPending ? '提交中…' : guardScan && allowOverride ? '放行并提交' : '提交变更'}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -218,6 +298,10 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
   });
   const [reason, setReason] = useState('');
   const [evidenceOpen, setEvidenceOpen] = useState(false);
+  // 内容安全拦截后的误报放行状态：扫描结果、是否放行、放行理由
+  const [guardScan, setGuardScan] = useState<ContentScanResult | null>(null);
+  const [allowOverride, setAllowOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
   const evidenceQuery = useQuery({
     queryKey: ['kb-related-events', form.alert_template.trim(), form.service_name.trim()],
     queryFn: () =>
@@ -239,9 +323,13 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
             .map(([k, v]) => [k, v.trim()]),
         ),
         reason,
+        ...(allowOverride ? { allow_override: true, override_reason: overrideReason.trim() } : {}),
       }),
     onSuccess: (res) => {
       const caseId = res.change_set.case_id;
+      if (res.content_scan && res.content_scan.hits.length > 0) {
+        toast.info(`内容安全扫描命中 ${res.content_scan.hits.length} 处（${res.content_scan.risk_level === 'high' ? '已误报放行' : '低风险留痕'}），明细见审批单`);
+      }
       toast.success(
         res.auto_published
           ? `案例 ${caseId} 已创建并发布`
@@ -252,10 +340,23 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       onClose();
     },
-    onError: (e) => toast.error(`创建失败：${errDetail(e)}`),
+    onError: (e) => {
+      const scan = extractContentGuardScan(e);
+      if (scan) {
+        setGuardScan(scan);
+        setAllowOverride(false);
+        setOverrideReason('');
+        toast.error('内容安全扫描已拦截本次创建，请确认是否误报放行', { duration: 8000 });
+      } else {
+        toast.error(`创建失败：${errDetail(e)}`);
+      }
+    },
   });
 
-  const valid = Boolean(form.error_type.trim() && form.service_name.trim() && reason.trim());
+  const valid = Boolean(
+    form.error_type.trim() && form.service_name.trim() && reason.trim() &&
+    (!guardScan || !allowOverride || overrideReason.trim()),
+  );
 
   return (
     <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
@@ -363,11 +464,21 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
+        {guardScan && (
+          <OverrideBlock
+            scan={guardScan}
+            idPrefix="kb-create-override"
+            allow={allowOverride}
+            onAllow={setAllowOverride}
+            reason={overrideReason}
+            onReason={setOverrideReason}
+          />
+        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>取消</Button>
         <Button onClick={() => mutation.mutate()} disabled={!valid || mutation.isPending}>
-          {mutation.isPending ? '提交中…' : '创建案例'}
+          {mutation.isPending ? '提交中…' : guardScan && allowOverride ? '放行并创建' : '创建案例'}
         </Button>
       </DialogFooter>
     </DialogContent>

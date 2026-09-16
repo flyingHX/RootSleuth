@@ -45,6 +45,7 @@ from services.console_ai import (
     score_case,
 )
 from services.console_common import get_config, mask_sensitive, now_iso, write_audit
+from services.quality_scan import evaluate_diagnosis_quality
 
 logger = logging.getLogger(__name__)
 
@@ -732,6 +733,32 @@ async def _diagnose_fallback(
         return None, f"{type(exc).__name__}: {exc}"
 
 
+def _extract_rag_cases_from_trace(trace: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """从工具轨迹中收集 search_kb 观察到的召回案例（单次诊断质量评估的上下文来源）。"""
+    cases: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _collect(observation: Any) -> None:
+        if not isinstance(observation, dict):
+            return
+        obs_cases = observation.get("cases")
+        if isinstance(obs_cases, list):
+            for case in obs_cases:
+                if isinstance(case, dict) and case.get("case_id") and case["case_id"] not in seen:
+                    seen.add(case["case_id"])
+                    cases.append(case)
+        parallel = observation.get("parallel")
+        if isinstance(parallel, list):
+            for item in parallel:
+                if isinstance(item, dict):
+                    _collect(item.get("observation"))
+
+    for step in trace or []:
+        if isinstance(step, dict):
+            _collect(step.get("observation"))
+    return cases
+
+
 async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int) -> Dict[str, Any]:
     """诊断 Agent：多轮工具调用推理给出根因结论，失败自动降级为单轮诊断。"""
     actor = user.email or user.id
@@ -788,10 +815,20 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 actor=actor,
                 summary="重跑诊断前保留的旧结论",
             )
+        rag_cases = _extract_rag_cases_from_trace(loop_result["trace"])
+        quality = evaluate_diagnosis_quality(
+            {
+                "template": event.template or "",
+                "error_type": event.error_type or "",
+                "service_name": event.service_name or "",
+            },
+            f"{conclusion['root_cause']}\n{conclusion['solution']}",
+            rag_cases,
+        )
         event.ai_root_cause = conclusion["root_cause"]
         event.ai_solution = conclusion["solution"]
         event.ai_command = conclusion["command"] or None
-        event.ai_output_json = json.dumps({**conclusion, "agent": True}, ensure_ascii=False)
+        event.ai_output_json = json.dumps({**conclusion, "agent": True, "quality": quality}, ensure_ascii=False)
         event.confidence = conclusion["confidence"]
         event.status = "diagnosed"
         event.degraded_reason = None if conclusion["confidence"] >= threshold else f"low_confidence(<{threshold})"
@@ -803,7 +840,13 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
             status="succeeded",
             model=model_name,
             event_id=event.id,
-            result={"conclusion": conclusion, "threshold": threshold, "usage": usage_summary},
+            result={
+                "conclusion": conclusion,
+                "threshold": threshold,
+                "usage": usage_summary,
+                "quality": quality,
+                "rag": {"case_count": len(rag_cases), "kb_search_used": bool(rag_cases)},
+            },
             trace=loop_result["trace"],
             iterations=loop_result["iterations"],
             elapsed_ms=elapsed,
@@ -823,6 +866,8 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "confidence": conclusion["confidence"],
                 "usage": usage_summary,
                 "low_confidence": conclusion["confidence"] < threshold,
+                "trust_index": quality["trust_index"],
+                "quality_ok": quality["quality_ok"],
             },
         )
         return {
@@ -835,6 +880,8 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "iterations": loop_result["iterations"],
                 "duration_ms": round(elapsed, 2),
                 "usage": usage_summary,
+                "quality": quality,
+                "rag": {"case_count": len(rag_cases), "kb_search_used": bool(rag_cases)},
                 "tool_trace": loop_result["trace"],
                 "conclusion": {
                     **conclusion,

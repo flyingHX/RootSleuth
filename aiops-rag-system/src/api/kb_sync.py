@@ -33,6 +33,7 @@ class CaseUpsertRequest(BaseModel):
     service_name: str = ""
     cluster: str = ""
     error_type: str = ""
+    environment: str = Field(default="", description="部署环境（P0-2 环境隔离；空=公共/存量层）")
     severity: int = 2
     root_cause: str = ""
     solution: str = ""

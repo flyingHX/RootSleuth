@@ -15,6 +15,7 @@ import {
   CopyButton,
   EventStatusBadge,
   JsonPre,
+  QualityMetricsCard,
   RagBadge,
   SeverityBadge,
   SpinnerLine,
@@ -162,6 +163,14 @@ function CandidatesList({ detail }: { detail: EventDetail }) {
             <span className="font-mono font-medium">{c.case_id}</span>
             <span className="text-muted-foreground">{c.error_type} · {c.service_name}</span>
             <span className="ml-auto font-medium text-primary">相似度 {(c.score * 100).toFixed(1)}%</span>
+            {typeof c.embedding_score === 'number' && (
+              <Badge variant="outline" className="font-mono">语义 {c.embedding_score.toFixed(3)}</Badge>
+            )}
+            {typeof c.feedback_score === 'number' && c.feedback_score !== 0 && (
+              <Badge variant="outline" className={c.feedback_score > 0 ? 'text-teal-700' : 'text-red-600'}>
+                反馈 {c.feedback_score > 0 ? '+' : ''}{c.feedback_score}
+              </Badge>
+            )}
           </div>
           <p className="mt-1.5 leading-relaxed text-muted-foreground">根因：{c.root_cause || '—'}</p>
           <p className="leading-relaxed text-muted-foreground">处置：{c.solution || '—'}</p>
@@ -177,6 +186,8 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
     : detail.ai_output
       ? { ...detail.ai_output, model: 'deepseek-v4-flash（历史）', low_confidence: false, threshold: 0.7 }
       : null;
+  // 单次质量指标：优先取本次诊断响应，历史事件回退 ai_output_json 中持久化的 quality
+  const quality = result?.quality ?? detail.ai_output?.quality ?? null;
 
   if (!diagnosis) {
     return <p className="text-xs text-muted-foreground">尚无 AI 诊断结果，点击右上角「AI 诊断」生成。</p>;
@@ -190,9 +201,23 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
             <Badge variant="outline">召回分 {(result.rag.score * 100).toFixed(1)}%</Badge>
           )}
           <Badge variant="outline">检索 {result.rag.ms} ms</Badge>
+          {typeof result.elapsed_ms === 'number' && (
+            <Badge variant="outline">端到端 {result.elapsed_ms} ms</Badge>
+          )}
+          {result.rag.rerank && (
+            <Badge variant="outline" className="font-mono">
+              重排 {result.rag.rerank.strategy} · {result.rag.rerank.candidate_count} 候选
+            </Badge>
+          )}
+          {result.rag.embedding?.applied && (
+            <Badge variant="outline">
+              Embedding 加分（权重 {result.rag.embedding.boost_weight ?? 0.5}）
+            </Badge>
+          )}
           <Badge variant="secondary" className="font-mono">{diagnosis.model}</Badge>
         </div>
       )}
+      <QualityMetricsCard quality={quality} />
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-muted-foreground">置信度</span>
         <ConfidenceBadge value={diagnosis.confidence} low={diagnosis.low_confidence} />

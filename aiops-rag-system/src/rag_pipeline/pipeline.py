@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Union
 from ..models.event import StandardizedEvent
 from ..rag_pipeline.content_guard import assert_case_content_safe
 from ..utils.logger import get_logger
+from ..utils.quality_eval import evaluate_diagnosis_quality
 from ..utils.metrics import (
     rag_latency,
     rag_search_total,
@@ -97,7 +98,7 @@ class RAGPipeline:
 
             if not candidate_docs:
                 rag_search_total.labels(status="no_result").inc()
-                return self._finalize(self._fallback_no_result(event), start_time, [])
+                return self._finalize(self._fallback_no_result(event), start_time, [], event=event)
 
             # Step 4: 四层业务重排（L1 -> L2 -> (L3 ∥ L4) -> Fusion -> Top-3）
             stage = time.perf_counter()
@@ -132,12 +133,12 @@ class RAGPipeline:
             # 知识库召回统计回流：Top-3 进入 LLM 上下文即 recall_count+1
             self._record_recall_stats(top_cases)
 
-            return self._finalize(result, start_time, top_cases, rerank_result.stats)
+            return self._finalize(result, start_time, top_cases, rerank_result.stats, event=event)
         except Exception as exc:  # noqa: BLE001
             logger.error("RAG pipeline error: %s", exc)
             rag_search_total.labels(status="error").inc()
             return self._finalize(
-                self._fallback_no_result(event, reason=str(exc)), start_time, []
+                self._fallback_no_result(event, reason=str(exc)), start_time, [], event=event
             )
         finally:
             rag_latency.observe(time.perf_counter() - start_time)
@@ -229,8 +230,9 @@ class RAGPipeline:
         start_time: float,
         top_cases: List[Dict],
         stats=None,
+        event=None,
     ) -> Dict:
-        """补齐端到端耗时、相似案例列表与四层重排统计（供诊断接口直接返回）。"""
+        """补齐端到端耗时、相似案例列表、四层重排统计与单次质量指标（供诊断接口直接返回）。"""
         result["latency_ms"] = int((time.perf_counter() - start_time) * 1000)
         result["similar_cases"] = [
             {
@@ -264,6 +266,28 @@ class RAGPipeline:
                 "l3_available": stats.l3_available,
                 "l4_status": stats.l4_status,
             }
+        # 单次诊断质量指标（在线评估，前端逐次展示；评估失败不阻断诊断响应）
+        if event is not None:
+            try:
+                if isinstance(event, dict):
+                    query = {
+                        "template": str(event.get("template") or ""),
+                        "error_type": str(event.get("error_type") or ""),
+                        "service_name": str(event.get("service_name") or ""),
+                    }
+                else:
+                    query = {
+                        "template": str(event.template or ""),
+                        "error_type": str(event.error_type or ""),
+                        "service_name": str(event.service_name or ""),
+                    }
+                result["quality_metrics"] = evaluate_diagnosis_quality(
+                    query,
+                    f"{result.get('root_cause', '')}\n{result.get('solution', '')}",
+                    top_cases,
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Diagnosis quality evaluation failed", exc_info=True)
         return result
 
     def _parse_llm_result(self, llm_output: str, top_cases: List[Dict], event: StandardizedEvent) -> Dict:
@@ -352,6 +376,7 @@ class RAGPipeline:
             topology_snapshot=json.dumps(event.topology, ensure_ascii=False)[:1024],
             resolved_by=resolved_by,
             tenant_id=str(tenant_id or "default"),
+            environment=str(event.environment or ""),
             embedding=embedding,
             created_at=int(time.time() * 1000),
         )
@@ -399,6 +424,7 @@ class RAGPipeline:
             resolved_by=str(fields.get("resolved_by") or "console"),
             kb_version=int(fields.get("kb_version") or 0),
             tenant_id=str(fields.get("tenant_id") or "default"),
+            environment=str(fields.get("environment") or ""),
             embedding=embedding,
             created_at=created_at,
         )

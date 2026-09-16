@@ -260,3 +260,186 @@ export function diffEntries(diff: Record<string, { before: unknown; after: unkno
 export function JsonPre({ data }: { data: unknown }) {
   return <pre className="log-block">{JSON.stringify(data, null, 2)}</pre>;
 }
+
+// ---------------- 单次诊断质量指标（Trust Index / Faithfulness 等） ----------------
+
+/** 单次诊断质量指标（后端 quality_scan.evaluate_diagnosis_quality 口径）。 */
+export interface QualityMetrics {
+  faithfulness: number;
+  context_coverage: number;
+  answer_relevance: number;
+  hallucination_rate: number;
+  trust_index: number;
+  num_claims?: number;
+  unsupported_claims?: string[];
+  quality_ok: boolean;
+  gate_line: number;
+}
+
+/** 质量指标卡：逐次展示 Trust Index 与四项生成质量指标，低于质量线标红提示。 */
+export function QualityMetricsCard({ quality, title = '诊断质量评估' }: { quality: QualityMetrics | null | undefined; title?: string }) {
+  if (!quality || typeof quality.trust_index !== 'number') return null;
+  const items = [
+    { key: 'faithfulness', label: 'Faithfulness 忠实度', value: quality.faithfulness },
+    { key: 'context_coverage', label: '引用覆盖率', value: quality.context_coverage },
+    { key: 'answer_relevance', label: '答案相关性', value: quality.answer_relevance },
+    { key: 'hallucination_rate', label: '幻觉率', value: quality.hallucination_rate },
+  ];
+  return (
+    <div className={cn('rounded-md border p-3', quality.quality_ok ? 'bg-teal-600/5' : 'bg-red-500/5')}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold">{title}</p>
+        <Badge
+          variant="outline"
+          className={cn(
+            'font-medium',
+            quality.quality_ok
+              ? 'border-teal-600/40 bg-teal-600/10 text-teal-700'
+              : 'border-red-500/40 bg-red-500/10 text-red-600',
+          )}
+        >
+          Trust Index {(quality.trust_index * 100).toFixed(1)}%
+        </Badge>
+        <Badge variant="outline" className={quality.quality_ok ? 'text-teal-700' : 'text-red-600'}>
+          {quality.quality_ok ? `达标（线 ${(quality.gate_line * 100).toFixed(0)}%）` : `低于质量线 ${(quality.gate_line * 100).toFixed(0)}%`}
+        </Badge>
+        {typeof quality.num_claims === 'number' && (
+          <span className="ml-auto text-[11px] text-muted-foreground">断言数 {quality.num_claims}</span>
+        )}
+      </div>
+      <div className="mt-2.5 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+        {items.map((m) => (
+          <div key={m.key}>
+            <p className="text-[11px] text-muted-foreground">{m.label}</p>
+            <p className={cn('text-sm font-semibold', m.value < 0.5 ? 'text-amber-700' : 'text-foreground')}>
+              {(m.value * 100).toFixed(1)}%
+            </p>
+          </div>
+        ))}
+      </div>
+      {quality.unsupported_claims && quality.unsupported_claims.length > 0 && (
+        <div className="mt-2.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+          <p className="text-[11px] font-medium text-amber-700">
+            未被检索证据支撑的断言（{quality.unsupported_claims.length}），建议人工核实：
+          </p>
+          <ul className="mt-1 list-disc pl-4">
+            {quality.unsupported_claims.map((c, i) => (
+              <li key={i} className="text-[11px] leading-relaxed text-amber-700/90">{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------- 内容安全扫描（知识发布 / 审批预检） ----------------
+
+/** 内容安全扫描命中明细。 */
+export interface ContentScanHit {
+  field: string;
+  category: string;
+  risk: string;
+  count: number;
+  sample: string;
+}
+
+/** 内容安全扫描结果（后端 quality_scan.scan_case_content 口径）。 */
+export interface ContentScanResult {
+  rule_version: string;
+  risk_level: 'none' | 'medium' | 'high' | string;
+  blocked: boolean;
+  can_override: boolean;
+  categories: string[];
+  hits: ContentScanHit[];
+  quality_score: number;
+  scanned_fields: string[];
+  override?: { allowed: boolean; reason: string };
+}
+
+const SCAN_CATEGORY_LABEL: Record<string, string> = {
+  pii_email: '邮箱地址',
+  pii_phone: '手机号',
+  pii_id_card: '身份证号',
+  secret_aws_key: 'AWS 密钥',
+  secret_github: 'GitHub Token',
+  secret_slack: 'Slack Token',
+  secret_assignment: '凭证赋值',
+  token_jwt: 'JWT Token',
+  private_key: '私钥',
+  dangerous_command: '危险命令',
+  prompt_injection: '提示词注入',
+  malicious_script: '恶意脚本',
+};
+
+const SCAN_RISK_TONE: Record<string, string> = {
+  high: 'border-red-500/40 bg-red-500/10 text-red-600',
+  medium: 'border-amber-500/40 bg-amber-500/10 text-amber-700',
+  none: 'border-teal-600/40 bg-teal-600/10 text-teal-700',
+};
+
+/** 内容安全扫描卡：发布/审批场景展示规则版本、风险类别、命中明细与误报放行理由。 */
+export function ContentScanCard({ scan, title = '内容安全扫描' }: { scan: ContentScanResult | null | undefined; title?: string }) {
+  if (!scan || typeof scan !== 'object' || !scan.rule_version) return null;
+  const riskLabel = scan.risk_level === 'high' ? '高风险' : scan.risk_level === 'medium' ? '中风险（含 PII）' : '未检出风险';
+  return (
+    <div
+      className={cn(
+        'rounded-md border p-3',
+        scan.risk_level === 'high' ? 'border-red-500/40 bg-red-500/5' : scan.risk_level === 'medium' ? 'border-amber-500/40 bg-amber-500/5' : 'bg-teal-600/5',
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold">{title}</p>
+        <Badge variant="outline" className={cn('font-medium', SCAN_RISK_TONE[scan.risk_level] ?? '')}>
+          {riskLabel}
+        </Badge>
+        {scan.blocked && !scan.override && (
+          <Badge variant="outline" className="border-red-500/40 bg-red-500/10 text-red-600">已拦截发布</Badge>
+        )}
+        {scan.override && (
+          <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">人工误报放行</Badge>
+        )}
+        <Badge variant="outline">质量分 {(scan.quality_score * 100).toFixed(0)}%</Badge>
+        <span className="ml-auto text-[11px] text-muted-foreground">规则版本 {scan.rule_version}</span>
+      </div>
+      {scan.override && (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-amber-700">
+          放行理由：{scan.override.reason}
+        </p>
+      )}
+      {scan.hits.length > 0 ? (
+        <div className="mt-2 overflow-hidden rounded-md border text-xs">
+          <table className="w-full table-fixed">
+            <thead>
+              <tr className="border-b bg-muted/60 text-left text-muted-foreground">
+                <th className="w-24 px-2.5 py-1.5 font-medium">字段</th>
+                <th className="w-28 px-2.5 py-1.5 font-medium">风险类别</th>
+                <th className="w-16 px-2.5 py-1.5 font-medium">级别</th>
+                <th className="w-14 px-2.5 py-1.5 font-medium">次数</th>
+                <th className="px-2.5 py-1.5 font-medium">命中样本（脱敏）</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scan.hits.map((h, i) => (
+                <tr key={`${h.category}-${h.field}-${i}`} className="border-b last:border-b-0">
+                  <td className="px-2.5 py-1.5 font-mono">{h.field}</td>
+                  <td className="px-2.5 py-1.5">{SCAN_CATEGORY_LABEL[h.category] ?? h.category}</td>
+                  <td className="px-2.5 py-1.5">
+                    <span className={cn(h.risk === 'high' ? 'text-red-600' : 'text-amber-700')}>
+                      {h.risk === 'high' ? '高' : '中'}
+                    </span>
+                  </td>
+                  <td className="px-2.5 py-1.5 font-mono">{h.count}</td>
+                  <td className="truncate px-2.5 py-1.5 font-mono text-muted-foreground" title={h.sample}>{h.sample}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="mt-1.5 text-[11px] text-muted-foreground">全部字段扫描通过，未检出 PII、密钥、危险命令、注入或恶意脚本。</p>
+      )}
+    </div>
+  );
+}

@@ -3,6 +3,7 @@
  * 禁止 fetch / axios / 直连地址 —— 全部走 client.apiCall.invoke。
  */
 import { client } from './api';
+import type { ContentScanResult, QualityMetrics } from '@/components/console/shared';
 
 export interface InvokeErrorShape {
   detail?: string;
@@ -20,6 +21,21 @@ export function errDetail(e: unknown): string {
     err?.message ||
     '请求失败，请稍后重试'
   );
+}
+
+/** 从错误中提取内容安全拦截扫描结果（detail={error:'content_guard_blocked', scan}）。 */
+export function extractContentGuardScan(e: unknown): ContentScanResult | null {
+  const err = e as { data?: { detail?: unknown }; response?: { data?: { detail?: unknown } } };
+  const detail = err?.data?.detail ?? err?.response?.data?.detail;
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    (detail as { error?: string }).error === 'content_guard_blocked' &&
+    (detail as { scan?: ContentScanResult }).scan
+  ) {
+    return (detail as { scan: ContentScanResult }).scan;
+  }
+  return null;
 }
 
 async function invoke<T>(url: string, method: 'GET' | 'POST' | 'PUT' = 'GET', data?: unknown): Promise<T> {
@@ -68,7 +84,37 @@ export interface DashboardData {
   }[];
   health: Record<string, { status: string; detail: string }>;
   kb: { total: number; archived: number; avg_feedback: number };
+  /** 知识健康（总览聚合）：红黄绿分级摘要 */
+  kb_health: {
+    total: number;
+    active: number;
+    archived: number;
+    green: number;
+    yellow: number;
+    red: number;
+    health_rate: number | null;
+  };
   todo: { pending_approvals: number; pending_unknowns: number };
+  /** 质量态势（总览）：单次诊断质量聚合 + 生成/检索/内容安全统计 */
+  quality: {
+    sample_count: number;
+    trust_index_avg: number | null;
+    faithfulness_avg: number | null;
+    context_coverage_avg: number | null;
+    answer_relevance_avg: number | null;
+    hallucination_rate_avg: number | null;
+    quality_ok_rate: number | null;
+    generation: { success: number; fail: number; success_rate: number | null };
+    retrieval: { success_rate: number | null; p99_ms: number | null; avg_ms: number | null };
+    content_safety: {
+      scans: number;
+      blocked: number;
+      flagged: number;
+      passed: number;
+      overrides: number;
+      last_rule_version: string | null;
+    };
+  };
 }
 
 export interface EventItem {
@@ -93,18 +139,29 @@ export interface EventDetail extends EventItem {
   topology: string | null;
   rag_ms: number | null;
   std_ms: number | null;
-  candidates: { case_id: string; error_type: string; service_name: string; score: number; root_cause: string | null; solution: string | null; feedback_score: number | null }[] | null;
+  candidates: { case_id: string; error_type: string; service_name: string; score: number; root_cause: string | null; solution: string | null; feedback_score: number | null; embedding_score?: number | null }[] | null;
   ai_root_cause: string | null;
   ai_solution: string | null;
   ai_command: string | null;
-  ai_output: { root_cause: string; solution: string; confidence: number; command: string } | null;
+  ai_output: { root_cause: string; solution: string; confidence: number; command: string; quality?: QualityMetrics | null } | null;
 }
 
 export interface DiagnosisResult {
   status: string;
   message: string;
   event_id: number;
-  rag: { status: string; score: number | null; ms: number; candidates: EventDetail['candidates'] };
+  rag: {
+    status: string;
+    score: number | null;
+    ms: number;
+    candidates: EventDetail['candidates'];
+    embedding?: { applied?: boolean; boost_weight?: number; reranked?: boolean } | null;
+    rerank?: { strategy: string; candidate_count: number } | null;
+  };
+  /** 单次诊断质量指标（Trust Index / Faithfulness 等） */
+  quality?: QualityMetrics | null;
+  /** 端到端耗时（毫秒） */
+  elapsed_ms?: number;
   diagnosis: {
     root_cause: string;
     solution: string;
@@ -165,6 +222,8 @@ export interface ChangeSet {
   approval_request_id: number | null;
   created_by: string | null;
   created_at: string | null;
+  /** 内容安全扫描结果（创建返回与审批内容附加，发布前预检留痕） */
+  content_scan?: ContentScanResult | null;
   /** 仅 /approvals/{id}/content 附加：新建案例的案例库完整字段视图 */
   full_case?: KbCaseFullView | null;
   /** 仅 /approvals/{id}/content 附加：关联日志实例样本（证据） */
@@ -197,6 +256,62 @@ export interface KbCaseFullView {
   version: number | null;
   feedback_score: number | null;
   missing_fields?: string[];
+}
+
+/** 知识健康风险案例（P2-1 健康报表风险清单项） */
+export interface KbHealthRiskCase {
+  case_id: string;
+  error_type: string;
+  service_name: string;
+  status: string;
+  version: number | null;
+  feedback_score: number | null;
+  age_days: number | null;
+  updated_at: string | null;
+  health: 'green' | 'yellow' | 'red';
+  reasons: string[];
+  sync_verified: boolean;
+  sync_dead: number;
+  sync_pending: number;
+  content_risk: string | null;
+  rule_version: string | null;
+}
+
+/** 知识库红黄绿健康报表（P2-1）：分级统计 + 同步闭环 + 内容安全 + 老化聚合 */
+export interface KbHealthReport {
+  generated_at: string;
+  expire_days: number;
+  unconditional_expire_days: number;
+  summary: {
+    total: number;
+    active: number;
+    archived: number;
+    green: number;
+    yellow: number;
+    red: number;
+    health_rate: number | null;
+  };
+  sync: {
+    verified_cases: number;
+    unverified_cases: number;
+    pending_tasks: number;
+    dead_tasks: number;
+  };
+  content_safety: {
+    scans: number;
+    blocked: number;
+    flagged: number;
+    passed: number;
+    overrides: number;
+    last_rule_version: string | null;
+  };
+  aging: {
+    expire_days: number;
+    stale_candidates: number;
+    avg_age_days: number | null;
+    oldest: { case_id: string; age_days: number | null } | null;
+  };
+  risk_cases: KbHealthRiskCase[];
 }
 
 export interface KbCaseDetail {
@@ -389,6 +504,12 @@ export interface AgentDiagnoseResult {
     duration_ms: number;
     tool_trace: AgentTraceStep[];
     conclusion: AgentConclusion;
+    /** 单次深度诊断质量指标 */
+    quality?: QualityMetrics | null;
+    /** 本次会话 RAG 知识库召回统计 */
+    rag?: { case_count?: number; kb_search_used?: boolean } | null;
+    /** 本次会话 Token 用量汇总 */
+    usage?: Record<string, unknown> | null;
   } | null;
   fallback?: unknown;
 }
@@ -522,6 +643,7 @@ export interface UserAdminItem {
 export const consoleApi = {
   getPermissions: () => invoke<Permissions>('/api/v1/console/permissions'),
   getDashboard: () => invoke<DashboardData>('/api/v1/console/dashboard'),
+  getKbHealth: () => invoke<KbHealthReport>('/api/v1/console/kb/health'),
 
   listEvents: (params: Record<string, string | number>) => {
     const qs = new URLSearchParams(
@@ -544,8 +666,22 @@ export const consoleApi = {
     return invoke<Paged<KbCase>>(`/api/v1/console/kb/cases?${qs}`);
   },
   getKbCase: (caseId: string) => invoke<KbCaseDetail>(`/api/v1/console/kb/cases/${encodeURIComponent(caseId)}`),
-  createChangeSet: (body: { case_id: string; change_type: string; fields: Record<string, string>; reason: string }) =>
-    invoke<{ change_set: ChangeSet; approval_mode: string; auto_published: boolean; approval_request_id?: number }>(
+  createChangeSet: (body: {
+    case_id: string;
+    change_type: string;
+    fields: Record<string, string>;
+    reason: string;
+    /** 高危内容误报放行：需同时填写 override_reason（写入审计） */
+    allow_override?: boolean;
+    override_reason?: string;
+  }) =>
+    invoke<{
+      change_set: ChangeSet;
+      approval_mode: string;
+      auto_published: boolean;
+      approval_request_id?: number;
+      content_scan?: ContentScanResult | null;
+    }>(
       '/api/v1/console/kb/change-sets', 'POST', body,
     ),
   rollbackCase: (caseId: string, version: number) =>

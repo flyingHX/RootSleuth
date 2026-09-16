@@ -229,7 +229,7 @@ class MilvusClient:
             return []
         try:
             rows = collection.query(
-                expr=f'fingerprint == "{fingerprint}"',
+                expr=f'fingerprint == "{_q(fingerprint)}"',
                 output_fields=["case_id", "feedback_score", "root_cause", "solution"],
             )
             return list(rows)
@@ -237,8 +237,12 @@ class MilvusClient:
             logger.error("Milvus query failed: %s", exc)
             return []
 
-    def query_by_case_id(self, case_id: str) -> List[dict]:
-        """按 case_id 精确查询索引行（供控制台发布后的检索验证与同步读改写）。"""
+    def query_by_case_id(self, case_id: str, tenant_id: Optional[str] = None) -> List[dict]:
+        """按 case_id 精确查询索引行（供控制台发布后的检索验证与同步读改写）。
+
+        P0-2 租户隔离：tenant_id 提供时按租户可见范围过滤（读路径默认启用）；
+        写路径（kb-sync 租户守卫）保持不传 tenant_id，以探测跨租户占用并返回 403。
+        """
         collection = self._collection()
         if collection is None:
             return []
@@ -257,10 +261,15 @@ class MilvusClient:
                 "solution",
                 "kb_version",
                 "tenant_id",
+                "environment",
                 "created_at",
             ])
+            expr = f'case_id == "{_q(case_id)}"'
+            # 租户隔离：旧集合缺失 tenant_id 字段时跳过过滤（Schema 交集兼容）
+            if tenant_id is not None and "tenant_id" in self._schema_field_names(collection):
+                expr += f" and {tenant_expr(tenant_id)}"
             rows = collection.query(
-                expr=f'case_id == "{case_id}"',
+                expr=expr,
                 output_fields=output_fields,
             )
             return list(rows)
@@ -320,15 +329,22 @@ class MilvusClient:
     # 除向量外的全部标量字段（update_feedback 读改写时需带全字段，避免 upsert 清空列）
     _ALL_SCALAR_FIELDS = [f[0] for f in _SCHEMA_FIELDS if f[1] != "FLOAT_VECTOR"]
 
-    def update_feedback(self, case_id: str, delta: int) -> int:
-        """反馈闭环：+1 记 upvotes、-1 记 downvotes；feedback_score 保留为兼容派生字段。"""
+    def update_feedback(self, case_id: str, delta: int, tenant_id: Optional[str] = None) -> int:
+        """反馈闭环：+1 记 upvotes、-1 记 downvotes；feedback_score 保留为兼容派生字段。
+
+        P0-2 租户隔离：tenant_id 提供时仅允许反馈其可见租户范围的案例；
+        跨租户目标按未找到处理返回 0（旧集合缺失 tenant_id 字段时跳过过滤）。
+        """
         collection = self._collection()
         if collection is None:
             return 0
         try:
+            expr = f'case_id == "{_q(case_id)}"'
+            if tenant_id is not None and "tenant_id" in self._schema_field_names(collection):
+                expr += f" and {tenant_expr(tenant_id)}"
             rows = list(
                 collection.query(
-                    expr=f'case_id == "{case_id}"',
+                    expr=expr,
                     output_fields=self._output_fields(collection, self._ALL_SCALAR_FIELDS),
                 )
             )

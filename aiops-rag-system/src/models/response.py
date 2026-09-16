@@ -37,6 +37,20 @@ class RerankLayerStats(BaseModel):
     l4_status: str = "skipped"  # ok / degraded / skipped
 
 
+class DiagnosisQualityMetrics(BaseModel):
+    """单次诊断质量指标（在线评估，见 src/utils/quality_eval.py；前端逐次展示）。"""
+
+    faithfulness: float = 0.0
+    context_coverage: float = 0.0
+    answer_relevance: float = 0.0
+    hallucination_rate: float = 0.0
+    trust_index: float = 0.0
+    num_claims: int = 0
+    unsupported_claims: List[str] = Field(default_factory=list)
+    quality_ok: bool = False
+    gate_line: float = 0.85
+
+
 class DiagnosticResult(BaseModel):
     event_id: str
     root_cause: str
@@ -45,6 +59,7 @@ class DiagnosticResult(BaseModel):
     suggest_actions: List[str] = Field(default_factory=list)
     similar_cases: List[DiagnosticCaseRef] = Field(default_factory=list)
     rerank_stats: Optional[RerankLayerStats] = None
+    quality_metrics: Optional[DiagnosisQualityMetrics] = None
     latency_ms: int = 0
     is_fallback: bool = False
     reason: Optional[str] = None

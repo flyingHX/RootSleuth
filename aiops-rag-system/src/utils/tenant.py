@@ -32,18 +32,23 @@ def tenant_expr(tenant_id: str) -> str:
 
 
 def environment_expr(environment: str) -> str:
-    """Milvus 布尔表达式片段：environment == "..."（P0-2 环境隔离过滤）。"""
-    return f'environment == "{_quote_safe(environment)}"'
+    """Milvus 布尔表达式片段：环境过滤，含空环境公共/存量层（P0-2）。
+
+    查询 env=prod 时可见 environment == "prod" 与 environment == ""（未标注环境的
+    存量知识按共享层处理，避免迁移期召回塌陷）；查询未指定环境时由调用方跳过过滤。
+    """
+    return f'environment in ["{_quote_safe(environment)}", ""]'
 
 
 def row_environment_visible(row_environment: Optional[str], query_environment: Optional[str]) -> bool:
-    """数据行环境对查询是否可见：查询未指定环境时全量可见（存量兼容），指定时需等值匹配。
+    """数据行环境对查询是否可见：查询未指定环境时全量可见（存量兼容）。
 
-    旧行缺 environment（空串）仅在查询同样未指定或显式查空环境时可见。
+    查询指定环境时：行环境与查询环境等值，或行未标注环境（""，公共/存量共享层）。
     """
     if not query_environment:
         return True
-    return str(row_environment or "") == str(query_environment)
+    row_env = str(row_environment or "")
+    return row_env == str(query_environment) or row_env == ""
 
 
 def _quote_safe(value: str) -> str:

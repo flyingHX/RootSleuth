@@ -44,6 +44,15 @@
 - /api 404：Vite 代理目标端口与后端实际端口不一致（`BACKEND_PORT` 环境变量）。
 - 白屏：确认后端 `/health` 正常、前端构建产物完整。
 
+### 2.7 诊断质量跌破 0.85 告警线（P1-2）
+- **口径**：Trust Index `T = 0.4×Faithfulness + 0.35×Citation Accuracy + 0.25×(1−幻觉率)`，7 天滚动均值 < **0.85** 触发质量告警；Golden Set 门禁评测（P@1/MRR/HitRate）跌破门禁同样视为破线。
+- **观测入口**：总览「诊断质量态势」卡片、`GET /api/v1/console/dashboard` 的 `quality` 聚合、RAG 侧 `/metrics` 的 Golden Set / 生成质量 / Trust Index 指标（`rag_golden_*`、`rag_generation_*` 等，以实际输出为准；Prometheus 告警规则阈值按 0.85 配置）。
+- **处置**：
+  1. Events 页定位低分诊断（Faithfulness / 引用准确性），核对其候选案例是否过时或含错误方案；
+  2. 知识治理：Kb 页修正或归档问题案例，必要时在 Ops 页「知识健康」报表确认红黄绿分布与老化风险；
+  3. 检索质量排查：复跑 `aiops-rag-system/evaluation/` Golden Set 评测，确认 P@1 / MRR 回落原因（Embedding 变更、Milvus 索引重建、租户过滤调整）；
+  4. 处置后观察 24h，Trust Index 回到 ≥ 0.85 视为闭环；关键处置记审计。
+
 ## 3. 数据维护
 
 ### 3.1 演示数据重置

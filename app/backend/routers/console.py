@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from dependencies.auth import get_current_user
+from models.agent_sessions import Agent_sessions
 from models.audit_logs import Audit_logs
 from models.console_configs import Console_configs
 from models.Events import Events
@@ -18,6 +19,8 @@ from models.kb_cases import Kb_cases
 from schemas.auth import UserResponse
 from services import console_kb
 from services.console_ai import run_diagnosis
+from services.kb_health import build_health_report
+from services.quality_scan import aggregate_quality_stats
 from services.llm_runtime import (
     SECRET_CONFIG_KEYS,
     decrypt_secret,
@@ -49,6 +52,8 @@ class ChangeSetBody(BaseModel):
     change_type: str = "update"
     fields: Dict[str, Any] = {}
     reason: str = ""
+    allow_override: bool = False
+    override_reason: str = ""
 
 
 class RollbackBody(BaseModel):
@@ -177,6 +182,59 @@ async def get_dashboard(
     )
     pending_unknowns = pending_unknown_result.scalar() or 0
 
+    # 质量态势（总览）：单次诊断 Trust Index/质量指标聚合（事件 + Agent 会话双来源）
+    sessions_result = await db.execute(
+        select(Agent_sessions)
+        .where(Agent_sessions.session_type == "diagnose")
+        .order_by(Agent_sessions.id.desc())
+        .limit(200)
+    )
+    agent_rows = list(sessions_result.scalars().all())
+    quality_stats = aggregate_quality_stats(
+        [e.ai_output_json for e in events if e.ai_output_json],
+        [s.result_json for s in agent_rows],
+    )
+    # 知识健康（总览聚合）：红黄绿分级摘要（复用健康报表口径，Ops 页保留明细）
+    kb_health_summary = (await build_health_report(db))["summary"]
+    # 内容安全统计（总览）：content_guard_scan / content_guard_override 审计聚合
+    scan_stats: Dict[str, Any] = {
+        "scans": 0,
+        "blocked": 0,
+        "flagged": 0,
+        "passed": 0,
+        "overrides": 0,
+        "last_rule_version": None,
+    }
+    audits_result = await db.execute(
+        select(Audit_logs)
+        .where(Audit_logs.action.in_(["content_guard_scan", "content_guard_override"]))
+        .order_by(Audit_logs.id.desc())
+        .limit(300)
+    )
+    for log in audits_result.scalars().all():
+        try:
+            after = json.loads(log.after_json) if log.after_json else {}
+        except (TypeError, ValueError):
+            after = {}
+        if not isinstance(after, dict):
+            continue
+        if log.action == "content_guard_override":
+            scan_stats["overrides"] += 1
+            continue
+        scan_stats["scans"] += 1
+        risk_level = str(after.get("risk_level") or "none")
+        if after.get("override"):
+            # 误报放行（人工复核通过）计入 passed，不重复计 blocked
+            scan_stats["passed"] += 1
+        elif after.get("blocked") or risk_level == "high":
+            scan_stats["blocked"] += 1
+        elif risk_level == "medium":
+            scan_stats["flagged"] += 1
+        else:
+            scan_stats["passed"] += 1
+        if after.get("rule_version"):
+            scan_stats["last_rule_version"] = after["rule_version"]
+
     def top(counter: Dict[str, int], n: int = 5) -> List[Dict[str, Any]]:
         return [
             {"name": k, "count": v}
@@ -220,8 +278,34 @@ async def get_dashboard(
             },
         },
         "kb": {"total": kb_total, "archived": kb_archived, "avg_feedback": avg_feedback},
+        "kb_health": kb_health_summary,
         "todo": {"pending_approvals": pending_approvals, "pending_unknowns": pending_unknowns},
+        "quality": {
+            **quality_stats,
+            "generation": {
+                "success": llm_ok,
+                "fail": llm_fail,
+                "success_rate": round(llm_ok / llm_calls, 4) if llm_calls else None,
+            },
+            "retrieval": {
+                "success_rate": rag_success_rate,
+                "p99_ms": p99,
+                "avg_ms": avg_rag_ms,
+            },
+            "content_safety": scan_stats,
+        },
     }
+
+
+# ------------------ 知识库健康报表 ------------------
+
+@router.get("/kb/health")
+async def get_kb_health(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """知识库红黄绿健康报表（P2-1）：分级统计 + 同步闭环 + 内容安全 + 老化聚合。"""
+    return await build_health_report(db)
 
 
 # ------------------ 事件与诊断 ------------------

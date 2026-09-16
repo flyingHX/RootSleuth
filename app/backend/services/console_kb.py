@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.approval_requests import Approval_requests
 from models.approval_steps import Approval_steps
+from models.audit_logs import Audit_logs
 from models.Events import Events
 from models.kb_cases import Kb_cases
 from models.kb_change_sets import Kb_change_sets
@@ -33,6 +34,7 @@ from models.rule_versions import Rule_versions
 from models.unknown_templates import Unknown_templates
 from schemas.auth import UserResponse
 from services import rag_sync
+from services.quality_scan import scan_case_content
 from services.console_common import (
     ROLE_LABELS,
     ROLE_LEVELS,
@@ -480,8 +482,8 @@ async def _publish_change_set(
         after={"version": case.version, "change_set_id": change_set.id, "approval_id": approval_request_id},
     )
     # 索引同步闭环（评审 P0-1）：发布后 upsert Milvus 并回读验证，结果写审计 rag_index_sync
-    await rag_sync.sync_case_upsert(db, actor, case)
-    return {"case_id": case.case_id, "version": case.version}
+    index_sync = await rag_sync.sync_case_upsert(db, actor, case)
+    return {"case_id": case.case_id, "version": case.version, "index_sync": index_sync}
 
 
 async def _apply_merge(db: AsyncSession, proposal: Kb_merge_proposals, actor: str) -> Dict[str, Any]:
@@ -651,6 +653,14 @@ async def create_change_set(
         raise HTTPException(status_code=400, detail="case_id 不能为空")
     fields = _validate_fields(payload.get("fields") or {})
 
+    # 内容安全预检（P1-3）：高危内容拦截发布，支持凭理由误报放行（审计留痕）
+    scan = scan_case_content({key: fields.get(key, "") for key in KB_CASE_FIELDS})
+    if scan["blocked"]:
+        override_reason = str(payload.get("override_reason") or "").strip()
+        if not (payload.get("allow_override") and override_reason):
+            raise HTTPException(status_code=400, detail={"error": "content_guard_blocked", "scan": scan})
+        scan["override"] = {"allowed": True, "reason": override_reason}
+
     result = await db.execute(select(Kb_cases).where(Kb_cases.case_id == case_id).limit(1))
     existing = result.scalar_one_or_none()
     if change_type == "update" and existing is None:
@@ -689,6 +699,28 @@ async def create_change_set(
     )
     db.add(change_set)
     await db.flush()
+    await write_audit(
+        db,
+        actor=user.email or user.id,
+        action="content_guard_scan",
+        target_type="kb_change_set",
+        target_id=str(change_set.id),
+        after={**scan, "case_id": case_id, "change_type": change_type},
+    )
+    if scan.get("override"):
+        await write_audit(
+            db,
+            actor=user.email or user.id,
+            action="content_guard_override",
+            target_type="kb_change_set",
+            target_id=str(change_set.id),
+            after={
+                "case_id": case_id,
+                "reason": scan["override"]["reason"],
+                "risk_level": scan["risk_level"],
+                "categories": scan["categories"],
+            },
+        )
 
     mode = await get_config(db, "approval_mode", "SINGLE_REVIEW")
     if mode == "OFF":
@@ -698,6 +730,7 @@ async def create_change_set(
             "approval_mode": mode,
             "auto_published": True,
             "published": published,
+            "content_scan": scan,
         }
 
     request = await _create_approval_request(
@@ -725,6 +758,7 @@ async def create_change_set(
         "approval_mode": mode,
         "auto_published": False,
         "approval_request_id": request.id,
+        "content_scan": scan,
     }
 
 
@@ -856,6 +890,23 @@ async def get_approval_content(db: AsyncSession, request_id: int) -> Dict[str, A
                     data["related_events"] = _ser_event_samples(
                         await _fetch_related_events(db, after.get("alert_template"), service)
                     )
+            # 附带内容安全扫描结果（发布/审批前预检留痕，供审批人复核）
+            scan_log_result = await db.execute(
+                select(Audit_logs)
+                .where(
+                    Audit_logs.action == "content_guard_scan",
+                    Audit_logs.target_type == "kb_change_set",
+                    Audit_logs.target_id == str(cs.id),
+                )
+                .order_by(Audit_logs.id.desc())
+                .limit(1)
+            )
+            scan_log = scan_log_result.scalar_one_or_none()
+            if scan_log is not None:
+                try:
+                    data["content_scan"] = json.loads(scan_log.after_json)
+                except (TypeError, ValueError):
+                    data["content_scan"] = None
             content = data
     elif request.biz_type == "merge":
         result_p = await db.execute(

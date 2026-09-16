@@ -459,6 +459,8 @@ async def retry_due_tasks(
         {"executed", "succeeded", "dead_lettered", "pending_remaining", "dry_run"}
     """
     now = datetime.now(timezone.utc)
+    # P2-3 并发领取：FOR UPDATE SKIP LOCKED 行级锁，多实例/并发触发时同一到期任务仅被一个 worker 领取，
+    # 其余 worker 跳过被锁行，避免重复补偿执行（幂等键仍作最终兜底）。
     result = await db.execute(
         select(Rag_sync_tasks)
         .where(
@@ -467,6 +469,7 @@ async def retry_due_tasks(
         )
         .order_by(Rag_sync_tasks.next_retry_at.asc().nullsfirst())
         .limit(max(1, limit))
+        .with_for_update(skip_locked=True)
     )
     tasks = list(result.scalars().all())
 
