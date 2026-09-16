@@ -117,6 +117,7 @@
 | confidence_threshold | 诊断置信度阈值（0~1） |
 | rerank_weight_json | 重排权重（cosine/topology/time_decay/feedback） |
 | diagnose_temperature | 诊断 Agent 独立采样温度（默认 0：同一事件重复深度诊断输出稳定；治理/值班 Agent 仍使用 llm_temperature=0.2） |
+| diagnose_time_budget_seconds | 诊断墙钟时间预算（30~600 秒，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级/返回 502，防止 LLM 变慢时请求无限拉长 |
 | llm_timeout_seconds | LLM 诊断超时（10~300 秒） |
 | feature_flags_json | 功能开关（auto_diagnose/dedup_scan） |
 | default_role | 未绑定用户默认角色 |

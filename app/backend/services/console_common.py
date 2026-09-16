@@ -50,6 +50,7 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "llm_model": "deepseek-v4-flash",
     "llm_temperature": "0.2",
     "diagnose_temperature": "0",
+    "diagnose_time_budget_seconds": "90",
     "embedding_base_url": "",
     "embedding_api_key": "",
     "embedding_model": "",
@@ -78,6 +79,7 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "llm_model": "LLM Chat 模型名称（诊断与三类 Agent 共用，如 deepseek-v4-flash）",
     "llm_temperature": "LLM 采样温度（0~2，默认 0.2）",
     "diagnose_temperature": "深度诊断 Agent 采样温度（0~2，默认 0：固定零温保证同一事件重复诊断输出稳定；非法值回退 0）",
+    "diagnose_time_budget_seconds": "诊断 Agent 墙钟时间预算（秒，30~600，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级，防止 LLM 变慢时请求无限拉长",
     "embedding_base_url": "Embedding Base URL（缺省回退 llm_base_url）",
     "embedding_api_key": "Embedding API Key（加密存储、脱敏展示；缺省回退 llm_api_key）",
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
@@ -296,6 +298,14 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
             return False, "llm_timeout_seconds 必须是整数"
         if not (10 <= num <= 300):
             return False, "llm_timeout_seconds 必须在 10~300 之间"
+        return True, "ok"
+    if key == "diagnose_time_budget_seconds":
+        try:
+            num = float(value)
+        except ValueError:
+            return False, "diagnose_time_budget_seconds 必须是数字"
+        if not (30 <= num <= 600):
+            return False, "diagnose_time_budget_seconds 必须在 30~600 之间"
         return True, "ok"
     if key in ("rerank_weight_json", "feature_flags_json", "role_bindings_json"):
         try:

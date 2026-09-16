@@ -94,6 +94,8 @@ python scripts/fix_sequences.py
 
 > **诊断确定性配置（波动治理）**：诊断 Agent 采样温度不在环境变量中管理，而是走控制台配置中心 `console_configs` 的 `diagnose_temperature` 键（默认 `0`）。生产环境保持默认 0 以保证同一事件重复深度诊断输出稳定（模型、检索与工具轨迹可复现）；如需多路径探索再调高。修改即时生效并写 `config_update` 审计，详见《深度诊断 Agent 现状设计说明书》§8。
 
+> **诊断墙钟时间预算（Cloudflare 502 防护）**：诊断整体耗时同样走配置中心 `diagnose_time_budget_seconds` 键（默认 `90` 秒，范围 30~600）。多轮 ReAct 推理、强制收尾与单轮降级的时长叠加受该预算约束：余量不足即停止推理转入收尾，预算耗尽跳过 LLM 降级并返回结构化 502（`diagnose_time_budget_exhausted`），避免 LLM 变慢时请求时长叠加越过边缘代理（如 Cloudflare 默认 100s）或 Nginx 超时。生产部署时预算值应小于链路中最短的超时预算（边缘代理 < Nginx `proxy_read_timeout` < 应用内部超时）；经 Cloudflare 代理的部署建议保持默认 90 或更低。修改即时生效并写 `config_update` 审计。
+
 ### 6.1 RAG 流水线环境变量（/workspace/aiops-rag-system）
 
 RAG 服务为独立进程（经 `src/config.py` 读取环境变量），完整模板见 `aiops-rag-system/.env.example`。与服务间鉴权、多租户隔离相关的核心项（P0）：

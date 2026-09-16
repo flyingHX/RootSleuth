@@ -400,6 +400,7 @@ const LABELS: Record<string, string> = {
   llm_model: 'Chat 模型',
   llm_temperature: '采样温度',
   diagnose_temperature: '诊断采样温度',
+  diagnose_time_budget_seconds: '诊断时间预算（秒）',
   llm_timeout_seconds: '超时时间（秒）',
   embedding_base_url: 'Embedding Base URL',
   embedding_api_key: 'Embedding API Key',
@@ -427,7 +428,7 @@ const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: b
   {
     title: '诊断与审批策略',
     hint: '置信度低于阈值的诊断会标记低置信；重排权重 JSON 控制 RAG 案例召回排序（cosine/topology/time_decay/feedback）。',
-    keys: ['approval_mode', 'confidence_threshold', 'rerank_weight_json'],
+    keys: ['approval_mode', 'confidence_threshold', 'rerank_weight_json', 'diagnose_time_budget_seconds'],
   },
   {
     title: '系统配置',

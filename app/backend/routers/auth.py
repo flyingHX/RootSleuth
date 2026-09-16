@@ -334,9 +334,18 @@ async def get_current_user_info(current_user: UserResponse = Depends(get_current
 
 
 @router.get("/logout")
+@router.post("/logout")
 async def logout():
-    """Logout user."""
-    logout_url = build_logout_url()
+    """Logout user：返回 OIDC 登出跳转地址（GET 为 SDK 契约，POST 为兼容别名）。
+
+    fail-open：OIDC issuer 未配置或 URL 构造异常时不再抛 500，回退空 redirect_url，
+    由前端完成本地登录态清理，保证登出动作永远可用。
+    """
+    try:
+        logout_url = build_logout_url()
+    except Exception:  # noqa: BLE001 - 登出永不阻塞前端本地状态清理
+        logger.exception("[logout] build_logout_url failed, fail-open with empty redirect_url")
+        logout_url = ""
     return {"redirect_url": logout_url}
 
 

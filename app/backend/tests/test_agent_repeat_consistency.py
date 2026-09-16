@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from sqlalchemy import inspect as sa_inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -224,7 +225,12 @@ async def test_repeat_diagnose_agent_success_consistency(db_session, monkeypatch
     assert snap1["kb_candidates"]["local_ids"] == ["kb-a", "kb-b"]
     assert snap1["kb_candidates"]["local_ids"] == snap1["kb_candidates"]["merged_ids"]
     assert snap1["rule_version"] == 1
-    assert snap1["model_params"] == {"model": "deepseek-v4-flash", "temperature": 0.0, "timeout_seconds": 45}
+    assert snap1["model_params"] == {
+        "model": "deepseek-v4-flash",
+        "temperature": 0.0,
+        "timeout_seconds": 45,
+        "time_budget_seconds": 90.0,
+    }
 
     # 工具轨迹一致（调用顺序、参数、观察结果逐条可比）
     assert a1["tool_trace"] == a2["tool_trace"]
@@ -298,3 +304,29 @@ async def test_repeat_diagnose_agent_degraded_consistency(db_session, monkeypatc
     assert result1["fallback_error"] is None and result2["fallback_error"] is None
     assert result1["diagnosis"]["diagnosis"] == result2["diagnosis"]["diagnosis"]
     assert result1["diagnosis"]["quality"] == result2["diagnosis"]["quality"]
+
+
+@pytest.mark.asyncio
+async def test_diagnose_time_budget_exhausted_skips_fallback(db_session, monkeypatch):
+    """墙钟预算耗尽：首轮 LLM 调用前即终止推理，跳过 LLM 降级并返回结构化 502。"""
+    from services import console_agent as console_agent_module
+
+    event = _seed_event(db_session)
+    await db_session.commit()
+
+    user = UserResponse(id="u-1", email="ops@example.com")
+    fake = ScriptedLLM(SUCCESS_SCRIPT)
+    monkeypatch.setattr(llm_runtime, "llm_chat", fake)
+
+    async def _zero_budget(_db):
+        return 0.0
+
+    monkeypatch.setattr(console_agent_module, "_resolve_diagnose_time_budget", _zero_budget)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await run_diagnose_agent(db_session, user, event.id)
+
+    assert exc_info.value.status_code == 502
+    assert "diagnose_time_budget_exhausted" in str(exc_info.value.detail)
+    # 预算在每次推理轮次开始前检查：未消耗任何 LLM 调用
+    assert fake.calls == 0

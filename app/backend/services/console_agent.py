@@ -178,15 +178,18 @@ async def _llm_chat(
     messages: List[ChatMessage],
     max_tokens: int = 1600,
     temperature: Optional[float] = None,
+    timeout: Optional[int] = None,
 ):
     """LLM Chat：模型/温度/接入方式由控制台配置中心驱动（llm_runtime）。
 
     temperature 显式传入时覆盖配置中心采样温度：诊断 Agent 固定零温采样，
     保证同一事件重复深度诊断的输出与质量指标稳定（波动治理）。
+    timeout 显式传入时覆盖配置中心 llm_timeout_seconds：强制收尾阶段按剩余
+    墙钟预算截断单次调用超时，避免收尾调用越过整体预算。
     """
-    timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+    effective_timeout = timeout or int(await get_config(db, "llm_timeout_seconds", "45") or 45)
     return await llm_runtime.llm_chat(
-        db, messages, max_tokens=max_tokens, timeout=timeout, temperature=temperature
+        db, messages, max_tokens=max_tokens, timeout=effective_timeout, temperature=temperature
     )
 
 
@@ -386,10 +389,13 @@ async def _run_react(
     task_prompt: str,
     tools: Dict[str, ToolHandler],
     temperature: Optional[float] = None,
+    deadline: Optional[float] = None,
 ) -> Dict[str, Any]:
     """ReAct 多轮循环：模型输出动作 → 执行工具 → 回填观察，直至 finish 或超限。
 
     temperature 透传给全部 LLM 调用（含超限强制收尾），诊断 Agent 传 0 保证确定性。
+    deadline 为墙钟时间预算的绝对时刻（perf_counter）：余量不足时停止继续推理转入
+    强制收尾（trace 记录 budget_exceeded），整体耗时不再随 LLM 变慢无限叠加。
     """
     trace: List[Dict[str, Any]] = []
     messages: List[ChatMessage] = [
@@ -402,6 +408,18 @@ async def _run_react(
 
     format_retries_left = FORMAT_RETRY_BUDGET
     while iterations < MAX_ITERATIONS:
+        # 墙钟时间预算（波动治理）：单次 LLM 调用有 timeout 上限，但多轮推理 × 强制收尾
+        # 仍可能叠加到数百秒并触发边缘代理超时（如 Cloudflare 默认 100s）。余量不足预留
+        # 时间即停止继续推理，转入强制收尾保证整体耗时有界。
+        if deadline is not None and time.perf_counter() + DIAGNOSE_TIME_RESERVE_SECONDS > deadline:
+            trace.append(
+                {
+                    "iteration": iterations,
+                    "budget_exceeded": True,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                }
+            )
+            break
         iterations += 1
         await _flush(db)
         response = await _llm_chat(db, messages, temperature=temperature)
@@ -467,7 +485,9 @@ async def _run_react(
         _append_observation(messages, tool_name, observation)
 
     # 超限强制收尾：独立收尾函数（最多重试 2 次），避免单次输出抖动导致整体失败
-    return await _conclude_react(db, messages, trace, iterations, started, usage_acc, temperature=temperature)
+    return await _conclude_react(
+        db, messages, trace, iterations, started, usage_acc, temperature=temperature, deadline=deadline
+    )
 
 
 async def _conclude_react(
@@ -478,9 +498,19 @@ async def _conclude_react(
     started: float,
     usage_acc: Dict[str, int],
     temperature: Optional[float] = None,
+    deadline: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """超限强制收尾：要求模型基于已有观察立即输出 finish JSON（最多重试 2 次）。"""
+    """超限强制收尾：要求模型基于已有观察立即输出 finish JSON（最多重试 2 次）。
+
+    deadline 传入时收尾阶段同样受墙钟预算约束：余量不足（< DIAGNOSE_MIN_CONCLUDE_SECONDS）
+    抛出 agent_time_budget_exhausted 交由上层降级决策；每次收尾调用的 LLM 超时截断为
+    剩余预算与配置超时的较小值，避免单次调用越过整体预算。
+    """
     await _flush(db)
+    try:
+        cfg_timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+    except (TypeError, ValueError):
+        cfg_timeout = 45
     final_messages = messages + [
         ChatMessage(
             role="user",
@@ -490,7 +520,13 @@ async def _conclude_react(
         )
     ]
     for _attempt in range(2):
-        response = await _llm_chat(db, final_messages, temperature=temperature)
+        llm_timeout: Optional[int] = None
+        if deadline is not None:
+            remaining = deadline - time.perf_counter()
+            if remaining < DIAGNOSE_MIN_CONCLUDE_SECONDS:
+                raise ValueError("agent_time_budget_exhausted")
+            llm_timeout = max(DIAGNOSE_MIN_CONCLUDE_SECONDS, min(cfg_timeout, int(remaining)))
+        response = await _llm_chat(db, final_messages, temperature=temperature, timeout=llm_timeout)
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is not None and payload.get("finish"):
@@ -770,6 +806,34 @@ async def _resolve_diagnose_temperature(db: AsyncSession) -> float:
     return _parse_diagnose_temperature(raw)
 
 
+# 诊断墙钟时间预算（波动治理 P0）：单次 LLM 调用有 timeout 上限，但多轮 ReAct +
+# 强制收尾仍可能叠加到数百秒并触发边缘代理（如 Cloudflare 默认 100s）502。预算约束
+# 整体耗时：余量不足停止推理转入收尾，预算耗尽跳过 LLM 降级直接结构化报错。
+DIAGNOSE_TIME_BUDGET_DEFAULT = 90.0
+DIAGNOSE_TIME_BUDGET_MIN = 30.0
+DIAGNOSE_TIME_BUDGET_MAX = 600.0
+DIAGNOSE_TIME_RESERVE_SECONDS = 12.0
+DIAGNOSE_MIN_CONCLUDE_SECONDS = 5.0
+DIAGNOSE_MIN_FALLBACK_SECONDS = 15.0
+
+
+def _parse_diagnose_time_budget(raw: Optional[str]) -> float:
+    """解析诊断墙钟预算：默认/空/非法/NaN 回退 90 秒，合法值截断到 [30, 600]。"""
+    try:
+        value = float(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return DIAGNOSE_TIME_BUDGET_DEFAULT
+    if value != value:  # NaN 防御
+        return DIAGNOSE_TIME_BUDGET_DEFAULT
+    return min(max(value, DIAGNOSE_TIME_BUDGET_MIN), DIAGNOSE_TIME_BUDGET_MAX)
+
+
+async def _resolve_diagnose_time_budget(db: AsyncSession) -> float:
+    """读取配置中心 diagnose_time_budget_seconds（默认 90）：诊断整体墙钟预算。"""
+    raw = await get_config(db, "diagnose_time_budget_seconds", str(int(DIAGNOSE_TIME_BUDGET_DEFAULT)))
+    return _parse_diagnose_time_budget(raw)
+
+
 def _rank_local_cases(
     cases: List[Kb_cases],
     event: Events,
@@ -884,6 +948,7 @@ async def _build_diagnose_snapshot(
     temperature: float,
     local_candidates: List[Dict[str, Any]],
     eval_context: List[Dict[str, Any]],
+    time_budget: float,
 ) -> Dict[str, Any]:
     """诊断上下文快照（波动治理）：事件输入、知识候选、激活规则版本与模型参数落库。
 
@@ -917,7 +982,12 @@ async def _build_diagnose_snapshot(
             "merged_ids": [str(c.get("case_id") or "") for c in eval_context],
         },
         "rule_version": active_rule.version if active_rule is not None else None,
-        "model_params": {"model": model_name, "temperature": temperature, "timeout_seconds": llm_timeout},
+        "model_params": {
+            "model": model_name,
+            "temperature": temperature,
+            "timeout_seconds": llm_timeout,
+            "time_budget_seconds": time_budget,
+        },
     }
 
 
@@ -942,9 +1012,17 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
     started = time.perf_counter()
     loop_result: Optional[Dict[str, Any]] = None
     loop_error: Optional[str] = None
+    # 墙钟时间预算（波动治理 P0）：多轮推理 + 强制收尾的总时长上限，超时自动降级
+    time_budget = await _resolve_diagnose_time_budget(db)
+    deadline = started + time_budget
     try:
         loop_result = await _run_react(
-            db, DIAGNOSE_AGENT_SYSTEM_PROMPT, task_prompt, tools, temperature=diagnose_temperature
+            db,
+            DIAGNOSE_AGENT_SYSTEM_PROMPT,
+            task_prompt,
+            tools,
+            temperature=diagnose_temperature,
+            deadline=deadline,
         )
         conclusion = _validate_diagnose_result(loop_result["result"], loop_result["trace"])
         if conclusion is None:
@@ -989,7 +1067,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
         )
         eval_context = _build_eval_context(local_candidates, rag_cases)
         snapshot = await _build_diagnose_snapshot(
-            db, event, model_name, diagnose_temperature, local_candidates, eval_context
+            db, event, model_name, diagnose_temperature, local_candidates, eval_context, time_budget
         )
         stability = {
             "temperature": diagnose_temperature,
@@ -1058,6 +1136,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "trust_index": quality["trust_index"],
                 "quality_ok": quality["quality_ok"],
                 "temperature": diagnose_temperature,
+                "time_budget_seconds": time_budget,
                 "context_fingerprint": stability["context_fingerprint"],
                 "rule_version": snapshot["rule_version"],
             },
@@ -1084,9 +1163,13 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
             },
         }
 
-    # 降级：回退既有单轮诊断
+    # 降级：回退既有单轮诊断。墙钟预算余量不足时跳过 LLM 降级（避免再叠加一次
+    # LLM 调用将整体耗时推向边缘代理超时），直接返回结构化 502 供前端提示重试。
     elapsed = (time.perf_counter() - started) * 1000.0
-    fallback, fallback_error = await _diagnose_fallback(db, event_id, actor)
+    if time_budget - elapsed / 1000.0 < DIAGNOSE_MIN_FALLBACK_SECONDS:
+        fallback, fallback_error = None, "diagnose_time_budget_exhausted"
+    else:
+        fallback, fallback_error = await _diagnose_fallback(db, event_id, actor)
     status = "degraded" if fallback is not None else "failed"
     row = await _save_session(
         db,

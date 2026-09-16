@@ -25,6 +25,7 @@ from services.console_agent import (
     _input_fingerprint,
     _oncall_quality_evaluate,
     _parse_diagnose_temperature,
+    _parse_diagnose_time_budget,
     _rank_local_cases,
 )
 from services.quality_scan import GATE_LINE, evaluate_diagnosis_quality
@@ -40,6 +41,18 @@ QUALITY_KEYS = {
     "quality_ok",
     "gate_line",
 }
+
+
+def test_parse_diagnose_time_budget_defaults_and_clamp():
+    """诊断墙钟预算解析：默认/空/非法/NaN 回退 90 秒，合法值截断到 [30, 600]。"""
+    assert _parse_diagnose_time_budget(None) == 90.0
+    assert _parse_diagnose_time_budget("") == 90.0
+    assert _parse_diagnose_time_budget("abc") == 90.0
+    assert _parse_diagnose_time_budget("nan") == 90.0
+    assert _parse_diagnose_time_budget("120") == 120.0
+    assert _parse_diagnose_time_budget(" 45 ") == 45.0
+    assert _parse_diagnose_time_budget("5") == 30.0
+    assert _parse_diagnose_time_budget("9999") == 600.0
 
 
 def test_evaluate_agent_quality_empty_returns_none():
