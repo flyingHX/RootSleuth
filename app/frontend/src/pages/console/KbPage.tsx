@@ -800,9 +800,18 @@ function MergeTab() {
 
   const groups = scanQuery.data?.groups ?? [];
   const groupKey = (g: MergeGroup) => g.case_ids.join('|');
-  const activeGroups = groups.filter((g) => !cancelledGroupKeys.includes(groupKey(g)));
-  const cancelledGroups = groups.filter((g) => cancelledGroupKeys.includes(groupKey(g)));
   const proposals = proposalsQuery.data?.items ?? [];
+  // 在途（pending）合并提案覆盖的案例组即时隐藏：提交合并审批后卡片立即消失，
+  // 与后端扫描排除口径一致；提案被拒绝后不再是 pending，案例组自动恢复展示。
+  const pendingCovered = new Set(
+    proposals
+      .filter((p: MergeProposal) => p.status === 'pending')
+      .flatMap((p: MergeProposal) => [p.master_case_id, ...p.merged_case_ids]),
+  );
+  const activeGroups = groups.filter(
+    (g) => !cancelledGroupKeys.includes(groupKey(g)) && !g.case_ids.some((id) => pendingCovered.has(id)),
+  );
+  const cancelledGroups = groups.filter((g) => cancelledGroupKeys.includes(groupKey(g)));
 
   return (
     <div className="space-y-4">

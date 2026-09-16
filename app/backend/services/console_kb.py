@@ -1124,10 +1124,22 @@ async def scan_duplicates(db: AsyncSession) -> List[Dict[str, Any]]:
 
     展示口径：仅当两条知识模板相似度 ≥ KB_DEDUP_SIMILARITY_THRESHOLD（默认 0.8）时
     才作为可合并对展示；同集群但相似度不达标的案例不再并入，避免误导性合并建议。
-    返回组内两两相似度（similarities）与组内最低相似度（min_pair_similarity）。
+    已被在途（pending）合并提案覆盖的案例（主案例与被合并案例）不再重复统计，
+    待审批完成（冗余案例归档）或提案被拒绝后恢复可扫；返回组内两两相似度
+    （similarities）与组内最低相似度（min_pair_similarity）。
     """
+    excluded: set = set()
+    pending_result = await db.execute(
+        select(Kb_merge_proposals).where(Kb_merge_proposals.status == "pending")
+    )
+    for p in pending_result.scalars().all():
+        excluded.add(p.master_case_id)
+        try:
+            excluded.update(json.loads(p.merged_case_ids or "[]"))
+        except (TypeError, ValueError):
+            pass
     result = await db.execute(select(Kb_cases).where(Kb_cases.status == "active"))
-    cases = list(result.scalars().all())
+    cases = [c for c in result.scalars().all() if c.case_id not in excluded]
     groups: List[Dict[str, Any]] = []
     used: set = set()
     for i, a in enumerate(cases):

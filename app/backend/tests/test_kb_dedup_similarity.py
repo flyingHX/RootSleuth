@@ -3,6 +3,7 @@
 覆盖 services.console_kb.scan_duplicates 的展示门槛语义：
 - 模板相似度 = 80%（阈值边界）且同错误类型 + 同服务 → 纳入同一合并组；
 - 模板相似度不足 80%（如 0.6 / 0.0）即使同集群也不再并入（移除同集群兜底口径）；
+- 已提交合并审批（pending 提案）的案例不再重复统计，提案拒绝后恢复可扫；
 - 组内返回两两相似度 similarities 与组内最低相似度 min_pair_similarity。
 """
 
@@ -11,8 +12,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from core.database import Base
-from models import kb_cases  # noqa: F401  注册表
+from models import kb_cases, kb_merge_proposals  # noqa: F401  注册表
 from models.kb_cases import Kb_cases
+from models.kb_merge_proposals import Kb_merge_proposals
 from services.console_kb import KB_DEDUP_SIMILARITY_THRESHOLD, scan_duplicates
 
 
@@ -77,3 +79,36 @@ async def test_scan_duplicates_low_similarity_not_grouped(db_session):
 
     groups = await scan_duplicates(db_session)
     assert groups == []
+
+
+@pytest.mark.asyncio
+async def test_scan_duplicates_excludes_pending_proposal_cases(db_session):
+    """已提交合并审批（pending 提案）的案例不再重复统计；提案拒绝后恢复可扫。"""
+    db_session.add_all(
+        [
+            _case("KB-M", "aaa bbb ccc ddd", "c1"),
+            _case("KB-N", "aaa bbb ccc ddd eee", "c1"),
+        ]
+    )
+    await db_session.commit()
+
+    # 提交合并审批前：扫描命中 1 组
+    groups = await scan_duplicates(db_session)
+    assert [g["case_ids"] for g in groups] == [["KB-M", "KB-N"]]
+
+    # 提交合并审批（pending 提案）后：主案例与被合并案例均不再被统计
+    proposal = Kb_merge_proposals(
+        master_case_id="KB-M",
+        merged_case_ids='["KB-N"]',
+        status="pending",
+        created_by="sre@atoms.dev",
+    )
+    db_session.add(proposal)
+    await db_session.commit()
+    assert await scan_duplicates(db_session) == []
+
+    # 审批拒绝：提案脱离 pending，案例恢复可扫并重新成组
+    proposal.status = "rejected"
+    await db_session.commit()
+    groups = await scan_duplicates(db_session)
+    assert [g["case_ids"] for g in groups] == [["KB-M", "KB-N"]]
