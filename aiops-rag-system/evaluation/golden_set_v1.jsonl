@@ -1,0 +1,50 @@
+{"qid": "g001", "query": {"service_name": "order-service", "error_type": "redis_timeout", "template": "jedis connection pool exhausted order alert"}, "relevant_case_ids": ["kb_case_001"]}
+{"qid": "g002", "query": {"service_name": "order-service", "error_type": "redis_timeout", "template": "could not get a resource from the pool"}, "relevant_case_ids": ["kb_case_001"]}
+{"qid": "g003", "query": {"service_name": "order-service", "error_type": "redis_timeout", "template": "lettuce pool wait queue timeout"}, "relevant_case_ids": ["kb_case_001"]}
+{"qid": "g004", "query": {"service_name": "order-service", "error_type": "mysql_deadlock", "template": "deadlock found when trying to get lock"}, "relevant_case_ids": ["kb_case_002"]}
+{"qid": "g005", "query": {"service_name": "order-service", "error_type": "mysql_deadlock", "template": "lock wait timeout exceeded transaction"}, "relevant_case_ids": ["kb_case_002"]}
+{"qid": "g006", "query": {"service_name": "order-service", "error_type": "mysql_deadlock", "template": "mysql transaction deadlock innodb restart"}, "relevant_case_ids": ["kb_case_002"]}
+{"qid": "g007", "query": {"service_name": "payment-service", "error_type": "kafka_lag", "template": "consumer group lag exceeded threshold"}, "relevant_case_ids": ["kb_case_003"]}
+{"qid": "g008", "query": {"service_name": "payment-service", "error_type": "kafka_lag", "template": "consumer rebalance failed repeatedly group"}, "relevant_case_ids": ["kb_case_003"]}
+{"qid": "g009", "query": {"service_name": "payment-service", "error_type": "kafka_lag", "template": "records lag max alarm payment topic"}, "relevant_case_ids": ["kb_case_003"]}
+{"qid": "g010", "query": {"service_name": "payment-service", "error_type": "oom", "template": "java lang outofmemoryerror java heap space"}, "relevant_case_ids": ["kb_case_004"]}
+{"qid": "g011", "query": {"service_name": "payment-service", "error_type": "oom", "template": "gc overhead limit exceeded pod restarted"}, "relevant_case_ids": ["kb_case_004"]}
+{"qid": "g012", "query": {"service_name": "payment-service", "error_type": "oom", "template": "heap dump triggered oomkilled pod"}, "relevant_case_ids": ["kb_case_004"]}
+{"qid": "g013", "query": {"service_name": "user-service", "error_type": "auth_expired", "template": "token signature verification failed"}, "relevant_case_ids": ["kb_case_005"]}
+{"qid": "g014", "query": {"service_name": "user-service", "error_type": "auth_expired", "template": "jwt expired signature mismatch key rotation"}, "relevant_case_ids": ["kb_case_005"]}
+{"qid": "g015", "query": {"service_name": "user-service", "error_type": "auth_expired", "template": "auth service 401 token verification"}, "relevant_case_ids": ["kb_case_005"]}
+{"qid": "g016", "query": {"service_name": "user-service", "error_type": "redis_timeout", "template": "redis command timed out slowlog"}, "relevant_case_ids": ["kb_case_006"]}
+{"qid": "g017", "query": {"service_name": "user-service", "error_type": "redis_timeout", "template": "redis slowlog keys pattern blocking"}, "relevant_case_ids": ["kb_case_006"]}
+{"qid": "g018", "query": {"service_name": "user-service", "error_type": "redis_timeout", "template": "redis command timeout session lettuce"}, "relevant_case_ids": ["kb_case_006"]}
+{"qid": "g019", "query": {"service_name": "gateway-service", "error_type": "upstream_5xx", "template": "502 bad gateway upstream prematurely closed"}, "relevant_case_ids": ["kb_case_007"]}
+{"qid": "g020", "query": {"service_name": "gateway-service", "error_type": "upstream_5xx", "template": "nginx upstream connect error after restart"}, "relevant_case_ids": ["kb_case_007"]}
+{"qid": "g021", "query": {"service_name": "gateway-service", "error_type": "upstream_5xx", "template": "envoy upstream reset before response started"}, "relevant_case_ids": ["kb_case_007"]}
+{"qid": "g022", "query": {"service_name": "gateway-service", "error_type": "dns_fail", "template": "unknownhostexception service resolve failed"}, "relevant_case_ids": ["kb_case_008"]}
+{"qid": "g023", "query": {"service_name": "gateway-service", "error_type": "dns_fail", "template": "coredns servfail resolve pod"}, "relevant_case_ids": ["kb_case_008"]}
+{"qid": "g024", "query": {"service_name": "gateway-service", "error_type": "dns_fail", "template": "dns resolve failed unknownhost gateway"}, "relevant_case_ids": ["kb_case_008"]}
+{"qid": "g025", "query": {"service_name": "search-service", "error_type": "es_circuit", "template": "circuit breaking exception data too large"}, "relevant_case_ids": ["kb_case_009"]}
+{"qid": "g026", "query": {"service_name": "search-service", "error_type": "es_circuit", "template": "real memory circuit breaker triggered"}, "relevant_case_ids": ["kb_case_009"]}
+{"qid": "g027", "query": {"service_name": "search-service", "error_type": "es_circuit", "template": "elasticsearch 429 circuit breaker aggregation"}, "relevant_case_ids": ["kb_case_009"]}
+{"qid": "g028", "query": {"service_name": "search-service", "error_type": "index_corrupt", "template": "unassigned shards cluster red"}, "relevant_case_ids": ["kb_case_010"]}
+{"qid": "g029", "query": {"service_name": "search-service", "error_type": "index_corrupt", "template": "read only allow delete block disk watermark"}, "relevant_case_ids": ["kb_case_010"]}
+{"qid": "g030", "query": {"service_name": "search-service", "error_type": "index_corrupt", "template": "elasticsearch cluster health red flood stage"}, "relevant_case_ids": ["kb_case_010"]}
+{"qid": "g031", "query": {"service_name": "inventory-service", "error_type": "db_pool_exhausted", "template": "hikaripool connection is not available"}, "relevant_case_ids": ["kb_case_011"]}
+{"qid": "g032", "query": {"service_name": "inventory-service", "error_type": "db_pool_exhausted", "template": "connection leak detected not returned"}, "relevant_case_ids": ["kb_case_011"]}
+{"qid": "g033", "query": {"service_name": "inventory-service", "error_type": "db_pool_exhausted", "template": "hikari pool exhausted database timeout"}, "relevant_case_ids": ["kb_case_011"]}
+{"qid": "g034", "query": {"service_name": "inventory-service", "error_type": "cpu_throttle", "template": "cpu throttling cgroup container limit"}, "relevant_case_ids": ["kb_case_012"]}
+{"qid": "g035", "query": {"service_name": "inventory-service", "error_type": "cpu_throttle", "template": "container cpu cfs throttled periods high"}, "relevant_case_ids": ["kb_case_012"]}
+{"qid": "g036", "query": {"service_name": "inventory-service", "error_type": "cpu_throttle", "template": "throttle periods pod cpu limit too low"}, "relevant_case_ids": ["kb_case_012"]}
+{"qid": "g037", "query": {"service_name": "msg-service", "error_type": "smtp_timeout", "template": "mailsendexception could not connect to smtp host"}, "relevant_case_ids": ["kb_case_013"]}
+{"qid": "g038", "query": {"service_name": "msg-service", "error_type": "smtp_timeout", "template": "smtp connection timed out port blocked"}, "relevant_case_ids": ["kb_case_013"]}
+{"qid": "g039", "query": {"service_name": "msg-service", "error_type": "smtp_timeout", "template": "messaging exception could not connect smtp relay"}, "relevant_case_ids": ["kb_case_013"]}
+{"qid": "g040", "query": {"service_name": "msg-service", "error_type": "rate_limit", "template": "429 too many requests provider"}, "relevant_case_ids": ["kb_case_014"]}
+{"qid": "g041", "query": {"service_name": "msg-service", "error_type": "rate_limit", "template": "rate limit exceeded retry after gateway"}, "relevant_case_ids": ["kb_case_014"]}
+{"qid": "g042", "query": {"service_name": "msg-service", "error_type": "rate_limit", "template": "message sending throttled 429 provider"}, "relevant_case_ids": ["kb_case_014"]}
+{"qid": "g043", "query": {"service_name": "unknown-service", "error_type": "redis_timeout", "template": "redis timeout pool across services"}, "relevant_case_ids": ["kb_case_001", "kb_case_006"]}
+{"qid": "g044", "query": {"service_name": "unknown-service", "error_type": "db_pool_exhausted", "template": "connection pool exhausted timeout"}, "relevant_case_ids": ["kb_case_011", "kb_case_001"]}
+{"qid": "g045", "query": {"service_name": "unknown-service", "error_type": "upstream_5xx", "template": "upstream 5xx bad gateway after deploy"}, "relevant_case_ids": ["kb_case_007"]}
+{"qid": "g046", "query": {"service_name": "unknown-service", "error_type": "auth_expired", "template": "token auth failures spike verification"}, "relevant_case_ids": ["kb_case_005"]}
+{"qid": "g047", "query": {"service_name": "unknown-service", "error_type": "oom", "template": "pod oomkilled heap space memory"}, "relevant_case_ids": ["kb_case_004"]}
+{"qid": "g048", "query": {"service_name": "unknown-service", "error_type": "kafka_lag", "template": "kafka consumer stuck lag group"}, "relevant_case_ids": ["kb_case_003"]}
+{"qid": "g049", "query": {"service_name": "unknown-service", "error_type": "es_circuit", "template": "circuit breaker triggered elasticsearch"}, "relevant_case_ids": ["kb_case_009"]}
+{"qid": "g050", "query": {"service_name": "unknown-service", "error_type": "rate_limit", "template": "rate limited 429 outbound provider"}, "relevant_case_ids": ["kb_case_014"]}

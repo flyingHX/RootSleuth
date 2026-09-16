@@ -19,6 +19,7 @@ from langchain_core.retrievers import BaseRetriever
 
 from ..models.event import StandardizedEvent
 from ..utils.logger import get_logger
+from ..utils.tenant import tenant_expr
 
 logger = get_logger(__name__)
 
@@ -27,7 +28,7 @@ OUTPUT_FIELDS = [
     "case_id", "fingerprint", "service_name", "cluster", "error_type",
     "severity", "start_time", "feedback_score", "upvotes", "downvotes",
     "hit_count", "recall_count", "root_cause", "solution", "alert_template",
-    "topology_snapshot", "resolved_by", "created_at",
+    "topology_snapshot", "resolved_by", "kb_version", "tenant_id", "created_at",
 ]
 
 
@@ -58,12 +59,19 @@ class MilvusEventRetriever(BaseRetriever):
 
     # ---------- 主流水线快速路径（dict 行，供四层重排消费）----------
     def retrieve_event(
-        self, event: StandardizedEvent, query_vector: Optional[List[float]] = None
+        self,
+        event: StandardizedEvent,
+        query_vector: Optional[List[float]] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[dict]:
-        """事件级检索入口（向量可复用，避免重复 embedding）。"""
+        """事件级检索入口（向量可复用，避免重复 embedding）。
+
+        tenant_id 提供时启用租户隔离过滤（P0-2）；旧集合缺失 tenant_id 字段时
+        由 MilvusClient.has_field 探测后自动跳过（Schema 交集兼容）。
+        """
         if query_vector is None:
             query_vector = self.embed_query_text(self.build_query_text(event))
-        return self._search_rows(event, query_vector)
+        return self._search_rows(event, query_vector, tenant_id=tenant_id)
 
     @staticmethod
     def build_query_text(event: StandardizedEvent) -> str:
@@ -73,20 +81,30 @@ class MilvusEventRetriever(BaseRetriever):
             f"【告警特征】: {event.template}"
         )
 
-    def _build_filter_expr(self, event: StandardizedEvent) -> str:
+    def _build_filter_expr(
+        self, event: StandardizedEvent, tenant_id: Optional[str] = None
+    ) -> str:
         since = event.timestamp - self.recent_window_days * 24 * 3600 * 1000
-        return (
+        expr = (
             f'service_name == "{event.service_name}" and '
             f'error_type == "{event.error_type}" and '
             f"start_time > {since}"
         )
+        # 租户隔离（P0-2）：仅当集合 Schema 已具备 tenant_id 字段时追加过滤表达式，
+        # 旧集合自动跳过（has_field 探测失败视为不支持，保持存量召回兼容）
+        if tenant_id and self.milvus_client.has_field("tenant_id"):
+            expr += f" and {tenant_expr(tenant_id)}"
+        return expr
 
     def _search_rows(
-        self, event: StandardizedEvent, query_vector: List[float]
+        self,
+        event: StandardizedEvent,
+        query_vector: List[float],
+        tenant_id: Optional[str] = None,
     ) -> List[dict]:
         return self.milvus_client.search(
             query_vector=query_vector,
-            expr=self._build_filter_expr(event),
+            expr=self._build_filter_expr(event, tenant_id=tenant_id),
             partition_names=self.milvus_client.recent_partitions(3),
             limit=self.top_k,
             output_fields=OUTPUT_FIELDS,
@@ -115,5 +133,9 @@ class MilvusEventRetriever(BaseRetriever):
             }
             base.update(query if isinstance(query, dict) else {"template": str(query)})
             event = StandardizedEvent(**base)
-        rows = self._search_rows(event, self.embed_query_text(self.build_query_text(event)))
+        rows = self._search_rows(
+            event,
+            self.embed_query_text(self.build_query_text(event)),
+            tenant_id=kwargs.get("tenant_id"),
+        )
         return rows_to_documents(rows)

@@ -7,6 +7,12 @@ from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+from ..utils.tenant import (  # noqa: E402  # 租户/环境过滤表达式（P0-2）
+    environment_expr,
+    tenant_expr,
+    tenant_visible_values,
+)
+
 _SCHEMA_FIELDS = [
     ("case_id", "VARCHAR", {"max_length": 64}, {"is_primary": True}),
     ("fingerprint", "VARCHAR", {"max_length": 64}, {}),
@@ -26,11 +32,18 @@ _SCHEMA_FIELDS = [
     ("topology_snapshot", "VARCHAR", {"max_length": 1024}, {}),
     ("resolved_by", "VARCHAR", {"max_length": 64}, {}),
     ("kb_version", "INT64", {}, {"default_value": 0}),
+    ("tenant_id", "VARCHAR", {"max_length": 64}, {"default_value": "default"}),
+    ("environment", "VARCHAR", {"max_length": 32}, {"default_value": ""}),
     ("embedding", "FLOAT_VECTOR", {"dim": 1024}, {}),
     ("created_at", "INT64", {}, {}),
 ]
 
 _SCALAR_INDEX_FIELDS = ["fingerprint", "service_name", "error_type", "cluster"]
+
+
+def _q(value: str) -> str:
+    """Milvus 表达式字符串转义：剔除内嵌引号与反斜杠，避免表达式注入（P0-2）。"""
+    return str(value or "").replace('"', "").replace("\\", "")
 
 
 class MilvusClient:
@@ -106,6 +119,16 @@ class MilvusClient:
         """按 Schema 交集过滤 output_fields（旧集合缺失字段动态剔除）。"""
         names = self._schema_field_names(collection)
         return [f for f in fields if f in names]
+
+    def has_field(self, field: str) -> bool:
+        """集合 Schema 是否包含指定字段（租户过滤等新特性的 Schema 交集探测）。"""
+        collection = self._collection()
+        if collection is None:
+            return False
+        try:
+            return field in self._schema_field_names(collection)
+        except Exception:  # noqa: BLE001
+            return False
 
     def ensure_collection(self, overwrite: bool = False) -> bool:
         """创建集合、索引与近 3 个月分区；已存在时按需跳过。"""
@@ -233,6 +256,7 @@ class MilvusClient:
                 "root_cause",
                 "solution",
                 "kb_version",
+                "tenant_id",
                 "created_at",
             ])
             rows = collection.query(
@@ -260,14 +284,19 @@ class MilvusClient:
             logger.error("Milvus upsert failed: %s", exc)
             return False
 
-    def delete_cases(self, case_ids: List[str]) -> bool:
-        """按 case_id 批量删除案例（供季度清理脚本使用）。"""
+    def delete_cases(self, case_ids: List[str], tenant_id: Optional[str] = None) -> bool:
+        """按 case_id 批量删除案例（归档/合并/季度清理）；tenant_id 提供时按租户可见范围过滤。"""
         collection = self._collection()
         if collection is None or not case_ids:
             return False
         try:
             ids = ",".join(f'"{c}"' for c in case_ids)
-            collection.delete(expr=f"case_id in [{ids}]")
+            expr = f"case_id in [{ids}]"
+            # 租户隔离：调用方只能删除其可见租户范围的行；旧集合缺失 tenant_id 字段时跳过过滤
+            if tenant_id is not None and "tenant_id" in self._schema_field_names(collection):
+                values = ",".join(f'"{v}"' for v in tenant_visible_values(tenant_id))
+                expr += f" and tenant_id in [{values}]"
+            collection.delete(expr=expr)
             collection.flush()
             return True
         except Exception as exc:  # noqa: BLE001

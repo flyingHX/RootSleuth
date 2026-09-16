@@ -58,6 +58,16 @@ async def _rag_base_url(db: AsyncSession) -> str:
     return str(await get_config(db, "rag_base_url", "") or "").strip().rstrip("/")
 
 
+async def _rag_api_key(db: AsyncSession) -> str:
+    """RAG 服务间鉴权 API Key（P0-1）：配置后以 X-API-Key 透传；留空 = RAG 侧鉴权关闭（对称 fail-open）。"""
+    return str(await get_config(db, "rag_api_key", "") or "").strip()
+
+
+def _auth_headers(api_key: str) -> Dict[str, str]:
+    """服务间鉴权 Header：仅在配置了 Key 时携带，兼容 RAG 鉴权未启用的存量部署。"""
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 async def _retry_base_seconds(db: AsyncSession) -> int:
     """补偿重试基础间隔（秒），指数退避基数。"""
     try:
@@ -122,16 +132,22 @@ def _case_payload(case: Any, idempotency_key: str = "", content_hash: str = "") 
 
 # ------------------ HTTP 帮助函数 ------------------
 
-async def _http_post(base: str, path: str, payload: Dict[str, Any]) -> httpx.Response:
-    """POST 请求封装（raise_for_status 由调用方处理）。"""
+async def _http_post(
+    base: str, path: str, payload: Dict[str, Any], api_key: str = ""
+) -> httpx.Response:
+    """POST 请求封装（raise_for_status 由调用方处理；配置 rag_api_key 时透传 X-API-Key）。"""
     async with httpx.AsyncClient(timeout=SYNC_TIMEOUT_SECONDS) as client:
-        return await client.post(f"{base}{path}", json=payload)
+        return await client.post(f"{base}{path}", json=payload, headers=_auth_headers(api_key))
 
 
-async def _http_verify(base: str, case_id: str) -> bool:
+async def _http_verify(base: str, case_id: str, api_key: str = "") -> bool:
     """按 case_id 回读验证索引行存在性。"""
     async with httpx.AsyncClient(timeout=SYNC_TIMEOUT_SECONDS) as client:
-        resp = await client.get(f"{base}/api/v1/kb-sync/verify", params={"case_id": case_id})
+        resp = await client.get(
+            f"{base}/api/v1/kb-sync/verify",
+            params={"case_id": case_id},
+            headers=_auth_headers(api_key),
+        )
         resp.raise_for_status()
         return bool(resp.json().get("exists"))
 
@@ -212,6 +228,7 @@ async def sync_case_upsert(db: AsyncSession, actor: str, case: Any) -> Dict[str,
     idem_key = _make_task_key(TASK_UPSERT, case.case_id, content_hash)
     payload = _case_payload(case, idempotency_key=idem_key, content_hash=content_hash)
     base = await _rag_base_url(db)
+    api_key = await _rag_api_key(db)
 
     if not base:
         result = {"ok": False, "skipped": "rag_base_url 未配置，跳过索引同步", "case_id": case.case_id}
@@ -223,14 +240,14 @@ async def sync_case_upsert(db: AsyncSession, actor: str, case: Any) -> Dict[str,
 
     cache_payload = {"case_id": case.case_id, "reason": "upsert"}
     try:
-        resp = await _http_post(base, "/api/v1/kb-sync/upsert", payload)
+        resp = await _http_post(base, "/api/v1/kb-sync/upsert", payload, api_key=api_key)
         resp.raise_for_status()
-        verified = await _http_verify(base, case.case_id)
+        verified = await _http_verify(base, case.case_id, api_key=api_key)
         if not verified:
             raise RuntimeError("upsert succeeded but verify failed (row not found in index)")
         # 缓存失效（best effort，失败不阻断同步闭环；HTTP 5xx/4xx 同样视为失败入队）
         try:
-            cache_resp = await _http_post(base, "/api/v1/kb-cache/invalidate", cache_payload)
+            cache_resp = await _http_post(base, "/api/v1/kb-cache/invalidate", cache_payload, api_key=api_key)
             cache_resp.raise_for_status()
         except Exception as cache_exc:  # noqa: BLE001
             logger.warning("Cache invalidate failed for %s: %s", case.case_id, cache_exc)
@@ -277,6 +294,7 @@ async def sync_cases_delete(db: AsyncSession, actor: str, case_ids: List[str]) -
     if not case_ids:
         return {"ok": True, "skipped": "无删除对象"}
     base = await _rag_base_url(db)
+    api_key = await _rag_api_key(db)
 
     if not base:
         result = {"ok": False, "skipped": "rag_base_url 未配置，跳过索引删除", "case_ids": case_ids}
@@ -287,12 +305,12 @@ async def sync_cases_delete(db: AsyncSession, actor: str, case_ids: List[str]) -
         return result
 
     try:
-        resp = await _http_post(base, "/api/v1/kb-sync/delete", {"case_ids": case_ids})
+        resp = await _http_post(base, "/api/v1/kb-sync/delete", {"case_ids": case_ids}, api_key=api_key)
         resp.raise_for_status()
         # 删除后逐个验证（任一仍存在 → 视为失败）
         failed_verifies = []
         for cid in case_ids:
-            if await _http_verify(base, cid):
+            if await _http_verify(base, cid, api_key=api_key):
                 failed_verifies.append(cid)
         if failed_verifies:
             raise RuntimeError(f"delete succeeded but {failed_verifies} still in index")
@@ -300,7 +318,7 @@ async def sync_cases_delete(db: AsyncSession, actor: str, case_ids: List[str]) -
         for cid in case_ids:
             cache_payload = {"case_id": cid, "reason": "delete"}
             try:
-                cache_resp = await _http_post(base, "/api/v1/kb-cache/invalidate", cache_payload)
+                cache_resp = await _http_post(base, "/api/v1/kb-cache/invalidate", cache_payload, api_key=api_key)
                 cache_resp.raise_for_status()
             except Exception as cache_exc:  # noqa: BLE001
                 logger.warning("Cache invalidate failed for %s: %s", cid, cache_exc)
@@ -333,12 +351,13 @@ async def sync_feedback(db: AsyncSession, actor: str, case_id: str, delta: int) 
     idem_key = f"feedback:{case_id}:{uuid.uuid4().hex[:12]}"
     payload = {"case_id": case_id, "score": delta, "idempotency_key": idem_key}
     base = await _rag_base_url(db)
+    api_key = await _rag_api_key(db)
 
     if not base:
         result = {"ok": False, "skipped": "rag_base_url 未配置，跳过反馈同步", "case_id": case_id}
     else:
         try:
-            resp = await _http_post(base, "/api/v1/feedback", payload)
+            resp = await _http_post(base, "/api/v1/feedback", payload, api_key=api_key)
             resp.raise_for_status()
             result = {
                 "ok": True, "case_id": case_id, "delta": delta,
@@ -367,28 +386,29 @@ async def _execute_task(db: AsyncSession, task: Rag_sync_tasks, base: str) -> bo
     retry_base = await _retry_base_seconds(db)
     max_attempts = task.max_attempts or await _max_attempts_default(db)
     resp = None
+    api_key = await _rag_api_key(db)
 
     try:
         if task.task_type == TASK_UPSERT:
-            resp = await _http_post(base, "/api/v1/kb-sync/upsert", payload)
+            resp = await _http_post(base, "/api/v1/kb-sync/upsert", payload, api_key=api_key)
             resp.raise_for_status()
-            verified = await _http_verify(base, task.case_id or "")
+            verified = await _http_verify(base, task.case_id or "", api_key=api_key)
             if not verified:
                 raise RuntimeError("upsert succeeded but verify failed (row not found in index)")
             task.verified = True
         elif task.task_type == TASK_DELETE:
-            resp = await _http_post(base, "/api/v1/kb-sync/delete", payload)
+            resp = await _http_post(base, "/api/v1/kb-sync/delete", payload, api_key=api_key)
             resp.raise_for_status()
             for cid in payload.get("case_ids", [task.case_id]):
-                if await _http_verify(base, cid):
+                if await _http_verify(base, cid, api_key=api_key):
                     raise RuntimeError(f"delete succeeded but case {cid} still in index")
             task.verified = True
         elif task.task_type == TASK_FEEDBACK:
-            resp = await _http_post(base, "/api/v1/feedback", payload)
+            resp = await _http_post(base, "/api/v1/feedback", payload, api_key=api_key)
             resp.raise_for_status()
             task.verified = True  # 反馈带幂等键，重放安全
         elif task.task_type == TASK_CACHE:
-            resp = await _http_post(base, "/api/v1/kb-cache/invalidate", payload)
+            resp = await _http_post(base, "/api/v1/kb-cache/invalidate", payload, api_key=api_key)
             resp.raise_for_status()
             task.verified = True
         else:

@@ -15,10 +15,12 @@
 """
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from ..rag_pipeline.content_guard import PoisonedContentError, assert_case_content_safe
 from ..runtime import get_pipeline
+from .security import DEFAULT_TENANT, ServiceIdentity, require_auth, row_visible
 
 router = APIRouter()
 
@@ -27,6 +29,7 @@ class CaseUpsertRequest(BaseModel):
     """控制台知识案例 → Milvus 索引行的同步载荷。"""
 
     case_id: str
+    tenant_id: Optional[str] = Field(default=None, description="租户归属；缺省由服务身份决定，仅 default 身份可显式指定")
     service_name: str = ""
     cluster: str = ""
     error_type: str = ""
@@ -57,14 +60,37 @@ _PRESERVE_COUNT_FIELDS = ("upvotes", "downvotes", "hit_count", "recall_count")
 
 
 @router.post("/kb-sync/upsert")
-async def kb_sync_upsert(req: CaseUpsertRequest):
-    """发布/更新/回滚同步：按 case_id upsert 索引并回读验证（幂等：同内容跳过重嵌入）。"""
+async def kb_sync_upsert(
+    req: CaseUpsertRequest, identity: ServiceIdentity = Depends(require_auth("write"))
+):
+    """发布/更新/回滚同步：按 case_id upsert 索引并回读验证（幂等：同内容跳过重嵌入）。
+
+    P0 安全卡点：write scope 鉴权 → 投毒预检（422）→ 租户归属 → 版本守卫（409）。
+    """
     pipeline = get_pipeline()
     try:
+        # 投毒预检：不合规内容不得进入 Milvus（补偿重放遇 422 视为永久失败 → 死信人工复核）
+        assert_case_content_safe(req.root_cause, req.solution, req.alert_template, source="kb_sync")
         payload = req.model_dump()
+        # 租户归属：服务端身份优先；default 身份（控制台管理面）可显式指定目标租户
+        payload["tenant_id"] = (
+            req.tenant_id
+            if (req.tenant_id and identity.tenant_id == DEFAULT_TENANT)
+            else identity.tenant_id
+        )
         existing = pipeline.milvus.query_by_case_id(req.case_id)
         if existing:
             prev = existing[0]
+            # 租户守卫：case_id 已被其他租户占用 → 拒绝跨租户覆盖（越权写保护）
+            if not row_visible(prev.get("tenant_id"), identity.tenant_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "tenant_mismatch",
+                        "case_id": req.case_id,
+                        "tenant_id": identity.tenant_id,
+                    },
+                )
             # 幂等短路（旧集合兼容）：以核心文本字段等值比较作为内容指纹的落地实现，
             # 不依赖 Milvus Schema 新增 content_hash 列（旧集合无该列，写入会失败）。
             same_content = (
@@ -98,8 +124,13 @@ async def kb_sync_upsert(req: CaseUpsertRequest):
                 if prev.get(key) is not None:
                     payload[key] = int(prev.get(key) or 0)
         case_id = pipeline.upsert_console_case(payload)
+    except PoisonedContentError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "poisoned_content_rejected", **exc.result.to_detail()},
+        )
     except HTTPException:
-        raise  # 版本守卫 409 等业务语义异常原样透出，不得降级为 503
+        raise  # 版本守卫 409 / 租户守卫 403 等业务语义异常原样透出，不得降级为 503
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=f"索引同步失败：{exc}")
     except Exception as exc:  # noqa: BLE001 - Embedding/向量维度等异常统一降级为 503
@@ -115,12 +146,14 @@ async def kb_sync_upsert(req: CaseUpsertRequest):
 
 
 @router.post("/kb-sync/delete")
-async def kb_sync_delete(req: CaseDeleteRequest):
-    """归档/合并同步：按 case_id 列表批量删除索引行并失效语义缓存。"""
+async def kb_sync_delete(
+    req: CaseDeleteRequest, identity: ServiceIdentity = Depends(require_auth("write"))
+):
+    """归档/合并同步：按 case_id 列表批量删除索引行并失效语义缓存（按调用方租户隔离）。"""
     if not req.case_ids:
         raise HTTPException(status_code=422, detail="case_ids 不能为空")
     pipeline = get_pipeline()
-    ok = pipeline.milvus.delete_cases(req.case_ids)
+    ok = pipeline.milvus.delete_cases(req.case_ids, tenant_id=identity.tenant_id)
     if not ok:
         raise HTTPException(status_code=503, detail="索引删除失败（Milvus 不可用）")
     # 删除后失效语义缓存（best effort：缓存失败不影响删除闭环）
@@ -133,7 +166,10 @@ async def kb_sync_delete(req: CaseDeleteRequest):
 
 
 @router.get("/kb-sync/verify")
-async def kb_sync_verify(case_id: str):
-    """检索验证：按 case_id 查询索引行，控制台发布后调用以确认检索侧可见。"""
+async def kb_sync_verify(case_id: str, identity: ServiceIdentity = Depends(require_auth("read"))):
+    """检索验证：按 case_id 查询索引行（跨租户行对调用方不可见）。"""
     rows = get_pipeline().milvus.query_by_case_id(case_id)
-    return {"case_id": case_id, "exists": bool(rows), "row": rows[0] if rows else None}
+    row = rows[0] if rows else None
+    if row is not None and not row_visible(row.get("tenant_id"), identity.tenant_id):
+        row = None
+    return {"case_id": case_id, "exists": row is not None, "row": row}

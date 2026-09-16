@@ -18,6 +18,8 @@ class StandardizedEvent(BaseModel):
     service_name: str
     cluster: str
     namespace: Optional[str] = None
+    # 部署环境（prod/staging/...；P0-2 环境隔离过滤维度，缺省空 = 不过滤）
+    environment: Optional[str] = None
     error_type: str  # 如 redis_timeout
     severity: int = 2  # 1=info, 2=warning, 3=critical
     confidence: float = 0.0

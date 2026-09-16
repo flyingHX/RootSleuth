@@ -53,3 +53,38 @@ rerank_degraded_total = Counter(
 rerank_final_total = Counter(
     "rerank_final_total", "Rerank funnel final output size", ["size"]
 )
+
+# ===== 知识内容安全（投毒预检 P1）=====
+kb_poison_scan_total = Counter(
+    "kb_poison_scan_total", "知识入库投毒预检扫描次数", ["result"]
+)
+kb_poison_blocked_total = Counter(
+    "kb_poison_blocked_total", "投毒预检拦截次数（按类别）", ["category"]
+)
+
+# ===== kb-search 检索 API（鉴权 + 租户隔离后）=====
+kb_search_requests_total = Counter(
+    "kb_search_requests_total", "kb-search 检索请求数", ["result"]
+)
+
+# ===== Golden Set 质量评测（P1-2；0.85 告警线见 docs/OPERATIONS_RUNBOOK.md）=====
+rag_quality_faithfulness = Gauge(
+    "rag_quality_faithfulness", "Golden Set 评测 Faithfulness（0~1）"
+)
+rag_quality_citation_accuracy = Gauge(
+    "rag_quality_citation_accuracy", "Golden Set 评测 Citation Accuracy（0~1）"
+)
+rag_quality_hallucination_rate = Gauge(
+    "rag_quality_hallucination_rate", "Golden Set 评测幻觉率（1 - Faithfulness 代理，0~1）"
+)
+rag_quality_trust_index = Gauge(
+    "rag_quality_trust_index", "Trust Index T = 0.4F + 0.35C + 0.25(1-P)（0~1）"
+)
+
+# ===== Golden Set 检索评测（P0-3：评测运行器回写最新值，/metrics 暴露趋势）=====
+rag_eval_precision_at1 = Gauge("rag_eval_precision_at1", "Golden Set 检索评测 Precision@1（AP@1）")
+rag_eval_precision_at5 = Gauge("rag_eval_precision_at5", "Golden Set 检索评测 Precision@5（AP@5 语义）")
+rag_eval_recall_at10 = Gauge("rag_eval_recall_at10", "Golden Set 检索评测 Recall@10")
+rag_eval_recall_at20 = Gauge("rag_eval_recall_at20", "Golden Set 检索评测 Recall@20")
+rag_eval_mrr = Gauge("rag_eval_mrr", "Golden Set 检索评测 MRR")
+rag_eval_hit_rate = Gauge("rag_eval_hit_rate", "Golden Set 检索评测 Hit@5")

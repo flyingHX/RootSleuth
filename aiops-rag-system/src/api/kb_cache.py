@@ -7,11 +7,14 @@
 - `GET /api/v1/kb-cache/status`：查看当前缓存 epoch 与本地缓存规模（运维观测）。
 
 fail-open：Redis 不可用时仅清本地进程内缓存（单实例语义仍正确），广播静默降级。
+
+P0 鉴权：invalidate 为写路径（write scope），status 为观测路径（read scope）。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from ..runtime import get_pipeline, get_redis
+from .security import ServiceIdentity, require_auth
 
 router = APIRouter()
 
@@ -24,7 +27,9 @@ class CacheInvalidateRequest(BaseModel):
 
 
 @router.post("/kb-cache/invalidate")
-async def kb_cache_invalidate(req: CacheInvalidateRequest):
+async def kb_cache_invalidate(
+    req: CacheInvalidateRequest, identity: ServiceIdentity = Depends(require_auth("write"))
+):
     """缓存失效入口：清本地缓存 + Redis Pub/Sub 广播到全部 RAG 实例。"""
     pipeline = get_pipeline()
     broadcast_ok = None
@@ -44,7 +49,7 @@ async def kb_cache_invalidate(req: CacheInvalidateRequest):
 
 
 @router.get("/kb-cache/status")
-async def kb_cache_status():
+async def kb_cache_status(identity: ServiceIdentity = Depends(require_auth("read"))):
     """缓存观测：epoch、本地缓存条数与 Redis 广播连通性。"""
     pipeline = get_pipeline()
     embedder = getattr(pipeline, "embedder", None)

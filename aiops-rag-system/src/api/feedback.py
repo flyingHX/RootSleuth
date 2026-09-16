@@ -4,16 +4,20 @@
 - 控制台 👍/👎 同步携带 `idempotency_key`（补偿任务重试复用同一键）；
 - RAG 侧以 Redis SETNX 标记幂等键：重复提交直接返回当前分数，不重复加分；
 - Redis 不可用时 fail-open（放行执行），避免反馈丢失——可用性优先于精确去重。
+
+P0 鉴权：/feedback 与 /cases/close 均为知识写路径，需要 write scope。
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ..models.event import StandardizedEvent
 from ..models.response import FeedbackResponse
+from ..rag_pipeline.content_guard import PoisonedContentError, assert_case_content_safe
 from ..runtime import get_pipeline, get_redis
 from ..utils.logger import get_logger
+from .security import ServiceIdentity, require_auth
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -35,7 +39,9 @@ class CaseCloseRequest(BaseModel):
 
 
 @router.post("/feedback", response_model=FeedbackResponse)
-async def submit_feedback(req: FeedbackRequest):
+async def submit_feedback(
+    req: FeedbackRequest, identity: ServiceIdentity = Depends(require_auth("write"))
+):
     """ChatOps 卡片 👍/👎 回调：更新 Milvus 中对应案例的 feedback_score（幂等去重）。"""
     if req.score not in (1, -1):
         raise HTTPException(status_code=422, detail="score must be +1 or -1")
@@ -62,17 +68,32 @@ async def submit_feedback(req: FeedbackRequest):
 
 
 @router.post("/cases/close", response_model=FeedbackResponse)
-async def close_case(req: CaseCloseRequest):
-    """告警被人工关闭 / 自愈成功时，将根因与方案写入知识库（按 fingerprint 去重 upsert）。"""
+async def close_case(
+    req: CaseCloseRequest, identity: ServiceIdentity = Depends(require_auth("write"))
+):
+    """告警被人工关闭 / 自愈成功时，将根因与方案写入知识库（按 fingerprint 去重 upsert）。
+
+    P1 投毒预检卡点：人工关闭内容先扫描（PII/密钥/危险命令/注入），命中即 422 拒绝入库。
+    """
     event_dict = get_redis().get_event(req.event_id)
     if not event_dict:
         raise HTTPException(status_code=404, detail="Event not found")
 
     event = StandardizedEvent(**event_dict)
-    case_id = get_pipeline().write_case(
-        event,
-        root_cause=req.root_cause,
-        solution=req.solution,
-        resolved_by=req.resolved_by,
-    )
+    try:
+        assert_case_content_safe(
+            req.root_cause, req.solution, event.template, source="cases_close"
+        )
+        case_id = get_pipeline().write_case(
+            event,
+            root_cause=req.root_cause,
+            solution=req.solution,
+            resolved_by=req.resolved_by,
+            tenant_id=identity.tenant_id,
+        )
+    except PoisonedContentError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "poisoned_content_rejected", **exc.result.to_detail()},
+        )
     return FeedbackResponse(status="success", case_id=case_id, feedback_score=0)

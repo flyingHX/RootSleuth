@@ -78,6 +78,14 @@ def load_config(base_dir: str = ".") -> dict:
             "index": os.getenv("ES_INDEX", "aiops-events"),
         },
         "chatops": {"webhook": os.getenv("CHATOPS_WEBHOOK", "")},
+        # 服务间鉴权与租户隔离（P0）：
+        # - RAG_API_KEYS_JSON 为空或 RAG_AUTH_ENABLED=false 时鉴权关闭（存量部署兼容）；
+        # - Key -> {name, tenant_id, scopes} 映射，见 src/api/security.py。
+        "auth": {
+            "enabled": os.getenv("RAG_AUTH_ENABLED", "true"),
+            "api_keys_json": os.getenv("RAG_API_KEYS_JSON", ""),
+            "default_tenant": os.getenv("RAG_DEFAULT_TENANT", "default"),
+        },
         "service_port": int(os.getenv("SERVICE_PORT", "8080")),
         "rules_path": os.getenv("RULES_PATH", "config/rules.yaml"),
         "drain_path": os.getenv("DRAIN_PATH", "config/drain_patterns.yaml"),

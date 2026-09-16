@@ -18,9 +18,10 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Union
 
 from ..models.event import StandardizedEvent
+from ..rag_pipeline.content_guard import assert_case_content_safe
 from ..utils.logger import get_logger
 from ..utils.metrics import (
     rag_latency,
@@ -74,8 +75,11 @@ class RAGPipeline:
             max_workers=self.llm_max_workers, thread_name_prefix="rag-llm"
         )
 
-    def search(self, event: Union[StandardizedEvent, Dict]) -> Dict:
-        """完整的 RAG 检索流水线入口（兼容 dict 事件，Kafka 消费路径直接可用）。"""
+    def search(self, event: Union[StandardizedEvent, Dict], tenant_id: Optional[str] = None) -> Dict:
+        """完整的 RAG 检索流水线入口（兼容 dict 事件，Kafka 消费路径直接可用）。
+
+        tenant_id 提供时按租户隔离过滤召回（P0-2）；旧集合缺失 tenant_id 字段时自动跳过。
+        """
         start_time = time.perf_counter()
         try:
             if isinstance(event, dict):
@@ -86,9 +90,9 @@ class RAGPipeline:
             query_vector = self.retriever.embed_query_text(self._build_query_text(event))
             rag_stage_latency.labels(stage="embedding").observe(time.perf_counter() - stage)
 
-            # Step 2 + 3: LangChain Retriever 双路召回（结构化粗筛 + ANN 精筛）
+            # Step 2 + 3: LangChain Retriever 双路召回（结构化粗筛 + ANN 精筛，按租户隔离）
             stage = time.perf_counter()
-            candidate_docs = self.retriever.retrieve_event(event, query_vector)
+            candidate_docs = self.retriever.retrieve_event(event, query_vector, tenant_id=tenant_id)
             rag_stage_latency.labels(stage="milvus_search").observe(time.perf_counter() - stage)
 
             if not candidate_docs:
@@ -138,11 +142,14 @@ class RAGPipeline:
         finally:
             rag_latency.observe(time.perf_counter() - start_time)
 
-    def retrieve_top_cases(self, event: Union[StandardizedEvent, Dict], top_k: int = 5) -> List[Dict]:
+    def retrieve_top_cases(
+        self, event: Union[StandardizedEvent, Dict], top_k: int = 5, tenant_id: Optional[str] = None
+    ) -> List[Dict]:
         """仅召回 + 四层重排（不调用诊断 LLM）：供控制台诊断 Agent 的 search_kb 工具使用。
 
         与 search() 的差异：跳过 LLM 诊断与召回统计回流，返回带各层分数的 Top-K 案例；
         宽松构造事件（缺失字段给中性默认值），任何异常静默降级为空列表（fail-open）。
+        tenant_id 提供时按租户隔离过滤召回（P0-2）。
         """
         try:
             if isinstance(event, dict):
@@ -154,7 +161,9 @@ class RAGPipeline:
                     }
                 )
             query_vector = self.retriever.embed_query_text(self._build_query_text(event))
-            candidate_docs = self.retriever.retrieve_event(event, query_vector)
+            candidate_docs = self.retriever.retrieve_event(
+                event, query_vector, tenant_id=tenant_id
+            )
             if not candidate_docs:
                 return []
             # 缺省时间戳回退为当前毫秒，避免 L1 过期过滤 / L2 时间衰减在 now_ms=0 下误杀
@@ -308,9 +317,17 @@ class RAGPipeline:
         root_cause: str,
         solution: str,
         resolved_by: str = "human",
+        tenant_id: Optional[str] = None,
     ) -> str:
-        """告警闭环后写入/覆盖知识案例：按 fingerprint 去重。"""
+        """告警闭环后写入/覆盖知识案例：按 fingerprint 去重。
+
+        P1 投毒预检卡点：命中危险模式抛 PoisonedContentError（API 层转 422），
+        不合规内容不得进入 Milvus。tenant_id 缺省为 default（公共知识层）。
+        """
         from ..models.case import KnowledgeCase
+
+        # 写路径最终卡点：cases/close 等所有写入口统一在入库前扫描
+        assert_case_content_safe(root_cause, solution, event.template, source="write_case")
 
         existing = self.milvus.query_by_fingerprint(event.fingerprint)
         case_id = (
@@ -334,6 +351,7 @@ class RAGPipeline:
             alert_template=event.template[:1024],
             topology_snapshot=json.dumps(event.topology, ensure_ascii=False)[:1024],
             resolved_by=resolved_by,
+            tenant_id=str(tenant_id or "default"),
             embedding=embedding,
             created_at=int(time.time() * 1000),
         )
@@ -380,6 +398,7 @@ class RAGPipeline:
             )[:1024],
             resolved_by=str(fields.get("resolved_by") or "console"),
             kb_version=int(fields.get("kb_version") or 0),
+            tenant_id=str(fields.get("tenant_id") or "default"),
             embedding=embedding,
             created_at=created_at,
         )

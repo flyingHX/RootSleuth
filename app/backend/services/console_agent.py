@@ -547,10 +547,13 @@ async def _rag_kb_search(
     base = str(await get_config(db, "rag_base_url", "") or "").strip().rstrip("/")
     if not base:
         return None
+    # P0-1 服务间鉴权：配置 rag_api_key 后以 X-API-Key 透传（RAG 侧鉴权关闭时忽略）
+    api_key = str(await get_config(db, "rag_api_key", "") or "").strip()
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{base}/api/v1/kb-search",
+                headers={"X-API-Key": api_key} if api_key else None,
                 json={
                     "service_name": service_name,
                     "error_type": error_type,

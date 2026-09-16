@@ -53,6 +53,7 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "embedding_api_key": "",
     "embedding_model": "",
     "rag_base_url": "",
+    "rag_api_key": "",
     "kb_expire_days": "90",
     "rag_sync_retry_base_seconds": "30",
     "rag_sync_max_attempts": "5",
@@ -78,6 +79,7 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "embedding_api_key": "Embedding API Key（加密存储、脱敏展示；缺省回退 llm_api_key）",
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
     "rag_base_url": "RAG 检索服务 Base URL（如 http://rag:8080；留空表示未部署，知识索引同步自动跳过）",
+    "rag_api_key": "RAG 服务间鉴权 API Key（RAG 启用 RAG_API_KEYS_JSON 时必填；服务端加密存储、脱敏展示；留空表示 RAG 侧鉴权关闭）",
     "kb_expire_days": "知识老化归档天数（生命周期巡检：老化且负反馈的活跃案例归档淘汰）",
     "feature_flags_json": "功能开关 JSON（auto_diagnose/dedup_scan 等）",
     "default_role": "未绑定角色用户的默认角色",
@@ -308,7 +310,7 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
         if value and not value.startswith(("http://", "https://")):
             return False, f"{key} 必须以 http:// 或 https:// 开头（或留空）"
         return True, "ok"
-    if key in ("llm_api_key", "embedding_api_key"):
+    if key in ("llm_api_key", "embedding_api_key", "rag_api_key"):
         if "****" in value:
             return False, f"{key} 展示为脱敏格式，请输入完整 API Key（或留空清除）"
         return True, "ok"

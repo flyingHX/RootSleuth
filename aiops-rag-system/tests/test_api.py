@@ -64,7 +64,7 @@ class FakeMilvus:
     def query_by_case_id(self, case_id):
         return self.rows.get(case_id, [])
 
-    def delete_cases(self, case_ids):
+    def delete_cases(self, case_ids, tenant_id=None):
         self.deleted.extend(case_ids)
         for case_id in case_ids:
             self.rows.pop(case_id, None)
@@ -77,7 +77,7 @@ class FakePipeline:
         self.written = []
         self.upserts = []
 
-    def search(self, event):
+    def search(self, event, tenant_id=None):
         return {
             "event_id": event.event_id,
             "root_cause": "Redis 连接池耗尽",
@@ -89,8 +89,8 @@ class FakePipeline:
             "latency_ms": 12,
         }
 
-    def write_case(self, event, root_cause, solution, resolved_by="human"):
-        self.written.append(event.event_id)
+    def write_case(self, event, root_cause, solution, resolved_by="human", tenant_id=None):
+        self.written.append((event.event_id, tenant_id))
         return "case_test_001"
 
     def upsert_console_case(self, fields):
@@ -196,7 +196,7 @@ def test_close_case_writes_knowledge(client):
     )
     assert resp.status_code == 200
     assert resp.json()["case_id"] == "case_test_001"
-    assert runtime.get_pipeline().written == [event_id]
+    assert [w[0] for w in runtime.get_pipeline().written] == [event_id]
 
 
 def test_healthz_and_readyz(client):

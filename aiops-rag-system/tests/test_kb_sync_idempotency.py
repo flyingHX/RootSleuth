@@ -39,7 +39,7 @@ class FakeMilvus:
     def query_by_case_id(self, case_id):
         return self.rows.get(case_id, [])
 
-    def delete_cases(self, case_ids):
+    def delete_cases(self, case_ids, tenant_id=None):
         self.deleted.extend(case_ids)
         for case_id in case_ids:
             self.rows.pop(case_id, None)

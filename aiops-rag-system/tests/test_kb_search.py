@@ -52,8 +52,8 @@ class StubPipeline:
         self.milvus = FakeMilvus()
         self.calls = []
 
-    def retrieve_top_cases(self, event, top_k=5):
-        self.calls.append((event.get("service_name"), event.get("error_type"), top_k))
+    def retrieve_top_cases(self, event, top_k=5, tenant_id=None):
+        self.calls.append((event.get("service_name"), event.get("error_type"), top_k, tenant_id))
         if event.get("service_name") == "order-service":
             return [
                 {
@@ -110,7 +110,7 @@ def test_retrieve_top_cases_rerank_only():
         def embed_query_text(self, text):
             return [0.1]
 
-        def retrieve_event(self, event, query_vector):
+        def retrieve_event(self, event, query_vector, tenant_id=None):
             return [{"case_id": "case_1", "root_cause": "r", "solution": "s", "service_name": "svc"}]
 
     class FakeRerank:

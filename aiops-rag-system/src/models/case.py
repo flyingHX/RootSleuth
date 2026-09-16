@@ -24,6 +24,10 @@ class KnowledgeCase(BaseModel):
     resolved_by: str = "human"
     # 知识版本号（发布/更新/回滚时递增；RAG 侧用于拒绝旧版本覆盖的版本守卫）
     kb_version: int = 0
+    # 租户归属（P0-2 多租户隔离；default 为公共知识层）
+    tenant_id: str = "default"
+    # 部署环境（P0-2 环境隔离；prod/staging/...，空 = 公共/不过滤）
+    environment: str = ""
     embedding: Optional[List[float]] = None
     created_at: int = 0
 
@@ -56,6 +60,8 @@ class KnowledgeCase(BaseModel):
             "topology_snapshot": self.topology_snapshot[:1024],
             "resolved_by": self.resolved_by,
             "kb_version": self.kb_version,
+            "tenant_id": self.tenant_id,
+            "environment": self.environment,
             "embedding": self.embedding,
             "created_at": self.created_at,
         }
