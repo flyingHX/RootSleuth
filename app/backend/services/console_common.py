@@ -39,6 +39,15 @@ ROLE_LABELS: Dict[str, str] = {
 
 APPROVAL_MODES = ("OFF", "SINGLE_REVIEW", "MULTI_LEVEL")
 
+# 三个业务 Agent 的独立配置作用域（模型/温度/超时，留空逐项继承全局 llm_* 配置）
+AGENT_CONFIG_SCOPES = ("diagnose", "kb_governance", "oncall")
+AGENT_TIMEOUT_KEYS = tuple(f"{scope}_llm_timeout_seconds" for scope in AGENT_CONFIG_SCOPES)
+AGENT_TEMPERATURE_KEYS = ("kb_governance_temperature", "oncall_temperature")
+# Agent 独立接入配置键（provider/base_url/api_key，留空逐项继承全局 llm_*）
+AGENT_PROVIDER_KEYS = tuple(f"{scope}_llm_provider" for scope in AGENT_CONFIG_SCOPES)
+AGENT_BASE_URL_KEYS = tuple(f"{scope}_llm_base_url" for scope in AGENT_CONFIG_SCOPES)
+AGENT_ACCESS_API_KEY_KEYS = tuple(f"{scope}_llm_api_key" for scope in AGENT_CONFIG_SCOPES)
+
 CONFIG_DEFAULTS: Dict[str, str] = {
     "approval_mode": "SINGLE_REVIEW",
     "confidence_threshold": "0.75",
@@ -51,6 +60,23 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "llm_temperature": "0.2",
     "diagnose_temperature": "0",
     "diagnose_time_budget_seconds": "90",
+    "diagnose_llm_model": "",
+    "diagnose_llm_timeout_seconds": "",
+    "kb_governance_llm_model": "",
+    "kb_governance_temperature": "",
+    "kb_governance_llm_timeout_seconds": "",
+    "oncall_llm_model": "",
+    "oncall_temperature": "",
+    "oncall_llm_timeout_seconds": "",
+    "diagnose_llm_provider": "",
+    "diagnose_llm_base_url": "",
+    "diagnose_llm_api_key": "",
+    "kb_governance_llm_provider": "",
+    "kb_governance_llm_base_url": "",
+    "kb_governance_llm_api_key": "",
+    "oncall_llm_provider": "",
+    "oncall_llm_base_url": "",
+    "oncall_llm_api_key": "",
     "embedding_base_url": "",
     "embedding_api_key": "",
     "embedding_model": "",
@@ -76,10 +102,27 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "llm_provider": "LLM 接入方式：atoms_hub（平台内置 AIHub）/ openai_compatible（自建 OpenAI 兼容接口）",
     "llm_base_url": "LLM OpenAI 兼容 Base URL（openai_compatible 时必填，如 https://api.deepseek.com/v1）",
     "llm_api_key": "LLM API Key（加密存储、脱敏展示；留空清除）",
-    "llm_model": "LLM Chat 模型名称（诊断与三类 Agent 共用，如 deepseek-v4-flash）",
+    "llm_model": "LLM Chat 模型名称（全局默认，三个 Agent 可用 <agent>_llm_model 单独覆盖，如 deepseek-v4-flash）",
     "llm_temperature": "LLM 采样温度（0~2，默认 0.2）",
     "diagnose_temperature": "深度诊断 Agent 采样温度（0~2，默认 0：固定零温保证同一事件重复诊断输出稳定；非法值回退 0）",
     "diagnose_time_budget_seconds": "诊断 Agent 墙钟时间预算（秒，30~600，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级，防止 LLM 变慢时请求无限拉长",
+    "diagnose_llm_model": "深度诊断 Agent 独立模型名（留空继承全局 llm_model）",
+    "diagnose_llm_timeout_seconds": "深度诊断 Agent 单次 LLM 超时（秒，10~300；留空继承全局 llm_timeout_seconds）",
+    "kb_governance_llm_model": "知识治理 Agent 独立模型名（留空继承全局 llm_model）",
+    "kb_governance_temperature": "知识治理 Agent 采样温度（0~2；留空或非法继承全局 llm_temperature）",
+    "kb_governance_llm_timeout_seconds": "知识治理 Agent 单次 LLM 超时（秒，10~300；留空继承全局 llm_timeout_seconds）",
+    "oncall_llm_model": "值班 Agent 独立模型名（留空继承全局 llm_model）",
+    "oncall_temperature": "值班 Agent 采样温度（0~2；留空或非法继承全局 llm_temperature）",
+    "oncall_llm_timeout_seconds": "值班 Agent 单次 LLM 超时（秒，10~300；留空继承全局 llm_timeout_seconds）",
+    "diagnose_llm_provider": "深度诊断 Agent 独立 LLM 接入方式（atoms_hub / openai_compatible；留空继承全局 llm_provider）",
+    "diagnose_llm_base_url": "深度诊断 Agent 独立 OpenAI 兼容 Base URL（留空继承全局 llm_base_url）",
+    "diagnose_llm_api_key": "深度诊断 Agent 独立 API Key（加密存储、脱敏展示；留空继承全局 llm_api_key）",
+    "kb_governance_llm_provider": "知识治理 Agent 独立 LLM 接入方式（atoms_hub / openai_compatible；留空继承全局 llm_provider）",
+    "kb_governance_llm_base_url": "知识治理 Agent 独立 OpenAI 兼容 Base URL（留空继承全局 llm_base_url）",
+    "kb_governance_llm_api_key": "知识治理 Agent 独立 API Key（加密存储、脱敏展示；留空继承全局 llm_api_key）",
+    "oncall_llm_provider": "值班 Agent 独立 LLM 接入方式（atoms_hub / openai_compatible；留空继承全局 llm_provider）",
+    "oncall_llm_base_url": "值班 Agent 独立 OpenAI 兼容 Base URL（留空继承全局 llm_base_url）",
+    "oncall_llm_api_key": "值班 Agent 独立 API Key（加密存储、脱敏展示；留空继承全局 llm_api_key）",
     "embedding_base_url": "Embedding Base URL（缺省回退 llm_base_url）",
     "embedding_api_key": "Embedding API Key（加密存储、脱敏展示；缺省回退 llm_api_key）",
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
@@ -307,6 +350,31 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
         if not (30 <= num <= 600):
             return False, "diagnose_time_budget_seconds 必须在 30~600 之间"
         return True, "ok"
+    if key.endswith("_llm_model") and key[: -len("_llm_model")] in AGENT_CONFIG_SCOPES:
+        # 留空表示继承全局 llm_model；含脱敏占位符说明是回显值被误提交
+        if "****" in value:
+            return False, f"{key} 配置值无效（请输入完整模型名或留空继承全局）"
+        return True, "ok"
+    if key in AGENT_TEMPERATURE_KEYS:
+        if not value.strip():
+            return True, "ok"  # 留空继承全局 llm_temperature
+        try:
+            num = float(value)
+        except ValueError:
+            return False, f"{key} 必须是数字"
+        if not (0 <= num <= 2):
+            return False, f"{key} 必须在 0~2 之间"
+        return True, "ok"
+    if key in AGENT_TIMEOUT_KEYS:
+        if not value.strip():
+            return True, "ok"  # 留空继承全局 llm_timeout_seconds
+        try:
+            num = int(value)
+        except ValueError:
+            return False, f"{key} 必须是整数"
+        if not (10 <= num <= 300):
+            return False, f"{key} 必须在 10~300 之间"
+        return True, "ok"
     if key in ("rerank_weight_json", "feature_flags_json", "role_bindings_json"):
         try:
             parsed = json.loads(value)
@@ -323,6 +391,19 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
         value = value.strip()
         if value and not value.startswith(("http://", "https://")):
             return False, f"{key} 必须以 http:// 或 https:// 开头（或留空）"
+        return True, "ok"
+    if key in AGENT_PROVIDER_KEYS:
+        if value and value not in ("atoms_hub", "openai_compatible"):
+            return False, f"{key} 仅支持 atoms_hub / openai_compatible（或留空继承全局）"
+        return True, "ok"
+    if key in AGENT_BASE_URL_KEYS:
+        value = value.strip()
+        if value and not value.startswith(("http://", "https://")):
+            return False, f"{key} 必须以 http:// 或 https:// 开头（或留空继承全局）"
+        return True, "ok"
+    if key in AGENT_ACCESS_API_KEY_KEYS:
+        if "****" in value:
+            return False, f"{key} 展示为脱敏格式，请输入完整 API Key（或留空继承全局）"
         return True, "ok"
     if key in ("llm_api_key", "embedding_api_key", "rag_api_key"):
         if "****" in value:

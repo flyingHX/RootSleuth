@@ -371,11 +371,52 @@ function KbHealthTab() {
 
 // ---------------- 配置中心（分组：LLM / Embedding / 策略 / 系统） ----------------
 
-/** 密钥类配置：后端仅返回脱敏值，保存空串表示清除 */
-const SECRET_KEYS = new Set(['llm_api_key', 'embedding_api_key']);
+/** 密钥类配置：后端仅返回脱敏值，保存空串表示清除（Agent 独立 Key 留空继承全局） */
+const SECRET_KEYS = new Set([
+  'llm_api_key',
+  'embedding_api_key',
+  'diagnose_llm_api_key',
+  'kb_governance_llm_api_key',
+  'oncall_llm_api_key',
+]);
+
+/** Agent 独立接入配置键（provider / Base URL / API Key，留空逐项继承全局） */
+const AGENT_ACCESS_KEYS = new Set([
+  'diagnose_llm_provider',
+  'diagnose_llm_base_url',
+  'diagnose_llm_api_key',
+  'kb_governance_llm_provider',
+  'kb_governance_llm_base_url',
+  'kb_governance_llm_api_key',
+  'oncall_llm_provider',
+  'oncall_llm_base_url',
+  'oncall_llm_api_key',
+]);
+/** Agent 独立 provider 用下拉选择：哨兵值表示“留空继承全局”（保存时映射为空串） */
+const AGENT_PROVIDER_SELECT_KEYS = new Set([
+  'diagnose_llm_provider',
+  'kb_governance_llm_provider',
+  'oncall_llm_provider',
+]);
+const INHERIT_SENTINEL = '__inherit__';
 
 const SELECT_OPTIONS: Record<string, { value: string; label: string }[]> = {
   llm_provider: [
+    { value: 'atoms_hub', label: '平台内置 AIHub' },
+    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+  ],
+  diagnose_llm_provider: [
+    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
+    { value: 'atoms_hub', label: '平台内置 AIHub' },
+    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+  ],
+  kb_governance_llm_provider: [
+    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
+    { value: 'atoms_hub', label: '平台内置 AIHub' },
+    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+  ],
+  oncall_llm_provider: [
+    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
     { value: 'atoms_hub', label: '平台内置 AIHub' },
     { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
   ],
@@ -401,6 +442,23 @@ const LABELS: Record<string, string> = {
   llm_temperature: '采样温度',
   diagnose_temperature: '诊断采样温度',
   diagnose_time_budget_seconds: '诊断时间预算（秒）',
+  diagnose_llm_model: '诊断 Agent 独立模型',
+  diagnose_llm_timeout_seconds: '诊断 Agent 超时（秒）',
+  kb_governance_llm_model: '治理 Agent 独立模型',
+  kb_governance_temperature: '治理 Agent 采样温度',
+  kb_governance_llm_timeout_seconds: '治理 Agent 超时（秒）',
+  oncall_llm_model: '值班 Agent 独立模型',
+  oncall_temperature: '值班 Agent 采样温度',
+  oncall_llm_timeout_seconds: '值班 Agent 超时（秒）',
+  diagnose_llm_provider: '诊断 Agent 接入方式',
+  diagnose_llm_base_url: '诊断 Agent Base URL',
+  diagnose_llm_api_key: '诊断 Agent API Key',
+  kb_governance_llm_provider: '治理 Agent 接入方式',
+  kb_governance_llm_base_url: '治理 Agent Base URL',
+  kb_governance_llm_api_key: '治理 Agent API Key',
+  oncall_llm_provider: '值班 Agent 接入方式',
+  oncall_llm_base_url: '值班 Agent Base URL',
+  oncall_llm_api_key: '值班 Agent API Key',
   llm_timeout_seconds: '超时时间（秒）',
   embedding_base_url: 'Embedding Base URL',
   embedding_api_key: 'Embedding API Key',
@@ -413,12 +471,33 @@ const LABELS: Record<string, string> = {
   role_bindings_json: '角色绑定 JSON',
 };
 
-const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: boolean }[] = [
+const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: boolean; agent?: string }[] = [
   {
-    title: 'LLM 模型接入',
-    hint: '诊断与三类 Agent（自研 ReAct）共用的 Chat 模型；切换为自建接口需填写 Base URL 与 API Key，保存后立即生效，无需重启。',
-    keys: ['llm_provider', 'llm_base_url', 'llm_api_key', 'llm_model', 'llm_temperature', 'diagnose_temperature', 'llm_timeout_seconds'],
+    title: 'LLM 模型接入（全局默认）',
+    hint: '三个 Agent 共享的默认模型与接入方式；Agent 未配置独立项时逐项继承这里的模型/温度/超时。切换为自建接口需填写 Base URL 与 API Key，保存后立即生效，无需重启。',
+    keys: ['llm_provider', 'llm_base_url', 'llm_api_key', 'llm_model', 'llm_temperature', 'llm_timeout_seconds'],
     testable: true,
+  },
+  {
+    title: '深度诊断 Agent 独立配置',
+    hint: '诊断 Agent 独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局）；诊断温度默认 0 保证重复诊断稳定，时间预算约束多轮推理总时长。',
+    keys: ['diagnose_llm_provider', 'diagnose_llm_base_url', 'diagnose_llm_api_key', 'diagnose_llm_model', 'diagnose_llm_timeout_seconds', 'diagnose_temperature', 'diagnose_time_budget_seconds'],
+    testable: true,
+    agent: 'diagnose',
+  },
+  {
+    title: '知识治理 Agent 独立配置',
+    hint: '告警聚类 AI 起草使用的独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局），可为治理任务单独切换自建网关或更强/更省的模型。',
+    keys: ['kb_governance_llm_provider', 'kb_governance_llm_base_url', 'kb_governance_llm_api_key', 'kb_governance_llm_model', 'kb_governance_temperature', 'kb_governance_llm_timeout_seconds'],
+    testable: true,
+    agent: 'kb_governance',
+  },
+  {
+    title: '值班 Agent 独立配置',
+    hint: 'ChatOps 值班报告生成使用的独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局），AI 失败自动降级为确定性统计报告。',
+    keys: ['oncall_llm_provider', 'oncall_llm_base_url', 'oncall_llm_api_key', 'oncall_llm_model', 'oncall_temperature', 'oncall_llm_timeout_seconds'],
+    testable: true,
+    agent: 'oncall',
   },
   {
     title: 'Embedding 语义检索',
@@ -428,7 +507,7 @@ const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: b
   {
     title: '诊断与审批策略',
     hint: '置信度低于阈值的诊断会标记低置信；重排权重 JSON 控制 RAG 案例召回排序（cosine/topology/time_decay/feedback）。',
-    keys: ['approval_mode', 'confidence_threshold', 'rerank_weight_json', 'diagnose_time_budget_seconds'],
+    keys: ['approval_mode', 'confidence_threshold', 'rerank_weight_json'],
   },
   {
     title: '系统配置',
@@ -445,7 +524,19 @@ function TestResultBox({ result }: { result: LlmTestResult }) {
           <Badge variant={result.chat.ok ? 'default' : 'destructive'} className="text-[10px]">
             {result.chat.ok ? 'Chat 连通正常' : 'Chat 连通失败'}
           </Badge>
+          {result.chat.agent && <Badge variant="outline" className="text-[10px]">Agent: {result.chat.agent}</Badge>}
+          {result.chat.access_source && (
+            <Badge variant={result.chat.access_source === 'agent' ? 'default' : 'outline'} className="text-[10px]">
+              {result.chat.access_source === 'agent' ? 'Agent 独立配置生效' : '继承全局配置'}
+            </Badge>
+          )}
           {result.chat.model && <span className="font-mono text-muted-foreground">{result.chat.model}</span>}
+          {typeof result.chat.resolved_timeout_seconds === 'number' && (
+            <span className="text-muted-foreground">超时 {result.chat.resolved_timeout_seconds}s</span>
+          )}
+          {result.chat.resolved_base_url && (
+            <span className="font-mono text-muted-foreground">{result.chat.resolved_base_url}</span>
+          )}
           {typeof result.chat.latency_ms === 'number' && <span className="text-muted-foreground">{result.chat.latency_ms}ms</span>}
         </p>
         {result.chat.ok ? (
@@ -505,7 +596,7 @@ function ConfigTab() {
   });
 
   const testMutation = useMutation({
-    mutationFn: () => consoleApi.testLlmConfig(),
+    mutationFn: (agent?: string) => consoleApi.testLlmConfig(agent),
     onSuccess: (res: LlmTestResult) => {
       setTestResult(res);
       if (res.chat.ok) toast.success(`Chat 连通正常（${res.chat.model ?? '-'}）`);
@@ -539,7 +630,7 @@ function ConfigTab() {
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
         模型接入、诊断策略与审批模式等全局配置；修改后立即生效并写入审计日志。
-        API Key 加密存储、脱敏展示（永不明文回显），输入新值替换、留空保存即清除。
+        API Key 加密存储、脱敏展示（永不明文回显），输入新值替换、留空保存即清除；Agent 独立配置留空保存即继承全局。
         {!canManage && ` 当前角色（${perms?.role_label}）为只读。`}
       </p>
       {CONFIG_GROUPS.map((group) => (
@@ -553,7 +644,7 @@ function ConfigTab() {
                   variant="outline"
                   className="ml-auto h-7 px-2.5 text-xs"
                   disabled={!canManage || testMutation.isPending}
-                  onClick={() => testMutation.mutate()}
+                  onClick={() => testMutation.mutate(group.agent)}
                 >
                   <Activity className="mr-1 h-3.5 w-3.5" />
                   {testMutation.isPending ? '测试中…' : '测试连通性'}
@@ -563,15 +654,31 @@ function ConfigTab() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">{group.hint}</p>
-            {group.testable && testResult && <TestResultBox result={testResult} />}
+            {group.testable && testResult && group.agent === testResult.chat.agent && (
+              <TestResultBox result={testResult} />
+            )}
             <div className="divide-y rounded-md border">
               {group.keys.map((key) => {
                 const cfg = byKey.get(key);
                 if (!cfg) return null;
                 const isSecret = SECRET_KEYS.has(key);
-                const draft = drafts[key] ?? (isSecret ? '' : cfg.value);
-                const changed = isSecret ? draft.trim().length > 0 : draft !== cfg.value;
+                const isInherit = AGENT_ACCESS_KEYS.has(key);
+                const isProviderSelect = AGENT_PROVIDER_SELECT_KEYS.has(key);
+                // provider 下拉：空值显示为“继承全局”哨兵项，保存时映射回空串
+                const storedValue = isProviderSelect && !cfg.value ? INHERIT_SENTINEL : cfg.value;
+                const draft = drafts[key] ?? (isSecret ? '' : storedValue);
+                const savedValue = isProviderSelect && draft === INHERIT_SENTINEL ? '' : draft;
+                const changed = isSecret ? draft.trim().length > 0 : savedValue !== cfg.value;
                 const options = SELECT_OPTIONS[key];
+                const placeholder = isSecret
+                  ? cfg.value
+                    ? `${cfg.value}（已配置，输入新值替换）`
+                    : isInherit
+                      ? '未配置（留空继承全局）'
+                      : '未配置'
+                  : isInherit && !cfg.value
+                    ? '留空继承全局'
+                    : '';
                 return (
                   <div key={key} className="flex flex-col gap-1.5 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3">
                     <div className="sm:w-60 sm:shrink-0">
@@ -606,13 +713,7 @@ function ConfigTab() {
                           type={isSecret ? 'password' : 'text'}
                           className={cn('h-9 font-mono text-xs', changed && 'border-primary')}
                           value={draft}
-                          placeholder={
-                            isSecret
-                              ? cfg.value
-                                ? `${cfg.value}（已配置，输入新值替换）`
-                                : '未配置'
-                              : ''
-                          }
+                          placeholder={placeholder}
                           autoComplete="off"
                           disabled={!canManage || updateMutation.isPending}
                           onChange={(e) => setDrafts((s) => ({ ...s, [key]: e.target.value }))}
@@ -625,7 +726,7 @@ function ConfigTab() {
                           className="h-9 shrink-0 text-xs text-muted-foreground"
                           disabled={!canManage || updateMutation.isPending}
                           onClick={() => {
-                            if (window.confirm(`确定清除 ${LABELS[key] ?? key}？清除后相关能力回退默认配置。`)) {
+                            if (window.confirm(`确定清除 ${LABELS[key] ?? key}？${isInherit ? '清除后继承全局同名配置。' : '清除后相关能力回退默认配置。'}`)) {
                               updateMutation.mutate({ key, value: '' });
                             }
                           }}
@@ -637,7 +738,7 @@ function ConfigTab() {
                         size="sm"
                         className="shrink-0"
                         disabled={!canManage || !changed || updateMutation.isPending}
-                        onClick={() => updateMutation.mutate({ key, value: draft })}
+                        onClick={() => updateMutation.mutate({ key, value: savedValue })}
                       >
                         <Save className="mr-1.5 h-3.5 w-3.5" />
                         {updateMutation.isPending ? '保存中…' : '保存'}

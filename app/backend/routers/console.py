@@ -889,19 +889,25 @@ async def update_config(
 
 @router.post("/configs/llm-test")
 async def test_llm_config(
+    agent: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """管理员连通性自检：按当前配置真实调用一次 Chat（及已启用的 Embedding）。"""
+    """管理员连通性自检：按当前配置真实调用一次 Chat（及已启用的 Embedding）。
+
+    agent 可选传三个业务 Agent 作用域（diagnose / kb_governance / oncall），
+    按 <agent>_* 独立配置测试（留空项回退全局 llm_* 配置）。
+    """
     await require_role(db, current_user, "sys_admin")
-    result = await test_llm_connectivity(db)
+    result = await test_llm_connectivity(db, agent=agent)
     await write_audit(
         db,
         actor=current_user.email or current_user.id,
         action="llm_config_test",
         target_type="console_config",
-        target_id="llm_runtime",
+        target_id=f"llm_runtime:{agent or 'global'}",
         after={
+            "agent": agent or "global",
             "chat_ok": bool(result["chat"].get("ok")),
             "embedding_ok": bool(result["embedding"].get("ok", False)),
         },

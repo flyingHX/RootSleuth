@@ -9,6 +9,8 @@
   provider=openai_compatible 且 base_url/api_key 齐全时使用自建
   OpenAI 兼容客户端（按 (base_url, api_key) 缓存实例）；
 - Embedding 独立配置，base_url/api_key 缺省回退 LLM 配置；
+- 三个业务 Agent 支持 <agent>_llm_provider / <agent>_llm_base_url /
+  <agent>_llm_api_key 独立接入（留空逐项继承全局 llm_*），可单独切换自建网关；
 - 所有读取均为每次请求实时读库（异步），配置变更立即生效；
 - 自研 ReAct Agent 编排、降级与持久化链路保持不变，仅模型接入
   参数由配置驱动。
@@ -25,14 +27,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from schemas.aihub import ChatMessage, GenTxtRequest, GenTxtResponse
 from services.aihub import AIHubService
-from services.console_common import get_config
+from services.console_common import AGENT_CONFIG_SCOPES, get_config
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 
 # 配置中心中的密钥类配置（加密存储 + 脱敏展示）
-SECRET_CONFIG_KEYS = ("llm_api_key", "embedding_api_key")
+# 含三个 Agent 的独立 API Key（留空继承全局 llm_api_key）
+SECRET_CONFIG_KEYS = (
+    "llm_api_key",
+    "embedding_api_key",
+    "diagnose_llm_api_key",
+    "kb_governance_llm_api_key",
+    "oncall_llm_api_key",
+)
+
+
+def agent_access_keys(agent: str) -> Tuple[str, str, str]:
+    """Agent 独立接入配置键名（provider / base_url / api_key，留空逐项继承全局）。"""
+    return (f"{agent}_llm_provider", f"{agent}_llm_base_url", f"{agent}_llm_api_key")
 
 try:
     from cryptography.fernet import Fernet
@@ -92,29 +106,105 @@ def mask_secret(plain: str) -> str:
     return f"{plain[:4]}****{plain[-4:]}"
 
 
-async def get_llm_settings(db: AsyncSession) -> Dict[str, Any]:
-    """读取 LLM 运行时配置（每次实时读库，变更立即生效）。"""
+async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None) -> Dict[str, Any]:
+    """读取 LLM 运行时配置（每次实时读库，变更立即生效）。
+
+    agent 传入三个业务 Agent 作用域（diagnose / kb_governance / oncall）时，
+    接入方式与模型参数优先读取 <agent>_* 独立配置（留空逐项继承全局 llm_*）：
+    - provider / base_url / api_key：<agent>_llm_provider / <agent>_llm_base_url /
+      <agent>_llm_api_key，逐项独立覆盖，支持单个 Agent 切换自建网关；
+    - 模型：留空继承全局 llm_model；
+    - 温度：kb_governance / oncall 留空或非法继承全局 llm_temperature；
+      diagnose 独立语义（diagnose_temperature，默认 0 确定性优先，非法回退 0）。
+    """
     provider = ((await get_config(db, "llm_provider", "atoms_hub")) or "atoms_hub").strip()
     base_url = (await get_config(db, "llm_base_url", "")).strip()
     api_key = decrypt_secret(await get_config(db, "llm_api_key", ""))
     model = (await get_config(db, "llm_model", DEFAULT_LLM_MODEL)).strip() or DEFAULT_LLM_MODEL
+    global_temperature_raw = (await get_config(db, "llm_temperature", "0.2")).strip() or "0.2"
     try:
-        temperature = float((await get_config(db, "llm_temperature", "0.2")).strip() or 0.2)
+        global_temperature = float(global_temperature_raw)
     except ValueError:
-        temperature = 0.2
-    temperature = min(max(temperature, 0.0), 2.0)
+        global_temperature = 0.2
+    global_temperature = min(max(global_temperature, 0.0), 2.0)
+    temperature = global_temperature
+    access_source = "global"
+    if agent in AGENT_CONFIG_SCOPES:
+        # 独立接入（provider/base_url/api_key）：留空逐项继承全局 llm_* 配置，
+        # 支持单个 Agent 切换独立网关而不影响其他 Agent 与全局默认
+        scoped_provider = (await get_config(db, f"{agent}_llm_provider", "")).strip()
+        scoped_base_url = (await get_config(db, f"{agent}_llm_base_url", "")).strip()
+        scoped_api_key = decrypt_secret(await get_config(db, f"{agent}_llm_api_key", ""))
+        if scoped_provider:
+            provider = scoped_provider
+            access_source = "agent"
+        if scoped_base_url:
+            base_url = scoped_base_url
+            access_source = "agent"
+        if scoped_api_key:
+            api_key = scoped_api_key
+            access_source = "agent"
+        scoped_model = (await get_config(db, f"{agent}_llm_model", "")).strip()
+        if scoped_model:
+            model = scoped_model
+        if agent == "diagnose":
+            # 诊断 Agent 固定零温语义（波动治理）：空/非法一律回退 0，而非全局温度
+            temperature = _parse_clamped_float(
+                (await get_config(db, "diagnose_temperature", "0")).strip(), 0.0, 0.0, 2.0
+            )
+        else:
+            scoped_temperature_raw = (await get_config(db, f"{agent}_temperature", "")).strip()
+            if scoped_temperature_raw:
+                try:
+                    scoped_temperature = float(scoped_temperature_raw)
+                except ValueError:
+                    logger.warning(
+                        "Config %s_temperature=%r 非法，回退全局 llm_temperature", agent, scoped_temperature_raw
+                    )
+                else:
+                    temperature = min(max(scoped_temperature, 0.0), 2.0)
     return {
         "provider": provider,
         "base_url": base_url,
         "api_key": api_key,
         "model": model,
         "temperature": temperature,
+        "access_source": access_source,
     }
 
 
-async def get_llm_model_name(db: AsyncSession) -> str:
-    """轻量接口：仅返回当前 Chat 模型名（用于会话/审计记录）。"""
+async def get_llm_model_name(db: AsyncSession, agent: Optional[str] = None) -> str:
+    """轻量接口：仅返回当前 Chat 模型名（用于会话/审计记录）。
+
+    agent 作用域下优先返回 <agent>_llm_model 独立配置，留空回退全局 llm_model。
+    """
+    if agent in AGENT_CONFIG_SCOPES:
+        scoped_model = (await get_config(db, f"{agent}_llm_model", "")).strip()
+        if scoped_model:
+            return scoped_model
     return (await get_config(db, "llm_model", DEFAULT_LLM_MODEL)).strip() or DEFAULT_LLM_MODEL
+
+
+async def get_llm_timeout(db: AsyncSession, agent: Optional[str] = None) -> float:
+    """读取 LLM 单次调用超时（秒）。
+
+    agent 作用域下优先读取 <agent>_llm_timeout_seconds（10~300 整数），
+    留空或非法回退全局 llm_timeout_seconds。
+    """
+    if agent in AGENT_CONFIG_SCOPES:
+        raw = (await get_config(db, f"{agent}_llm_timeout_seconds", "")).strip()
+        if raw:
+            try:
+                return float(int(raw))
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Config %s_llm_timeout_seconds=%r 非法，回退全局 llm_timeout_seconds", agent, raw
+                )
+    raw = (await get_config(db, "llm_timeout_seconds", "45")).strip() or "45"
+    try:
+        return float(int(raw))
+    except (TypeError, ValueError):
+        return 45.0
 
 
 def _get_openai_client(base_url: str, api_key: str):
@@ -131,6 +221,17 @@ def _get_openai_client(base_url: str, api_key: str):
     return client
 
 
+def _parse_clamped_float(raw: Optional[str], default: float, lo: float, hi: float) -> float:
+    """宽容解析浮点配置：空/非法/NaN 回退 default，合法值截断到 [lo, hi]。"""
+    try:
+        value = float(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return default
+    if value != value:  # NaN 防御
+        return default
+    return min(max(value, lo), hi)
+
+
 async def llm_chat(
     db: AsyncSession,
     messages: List[ChatMessage],
@@ -139,19 +240,19 @@ async def llm_chat(
     temperature: Optional[float] = None,
     max_tokens: int = 1600,
     timeout: Optional[float] = None,
+    agent: Optional[str] = None,
 ) -> GenTxtResponse:
     """统一 LLM Chat 入口：控制台配置驱动，atoms_hub 回退平台 AIHub。
 
+    agent 传入业务 Agent 作用域时，模型/温度/超时按 <agent>_* 独立配置解析
+    （留空逐项回退全局 llm_* 配置）；显式传入 model/temperature/timeout 仍然优先。
     超时抛出 asyncio.TimeoutError，降级语义由调用方决定。
     """
-    settings_ = await get_llm_settings(db)
+    settings_ = await get_llm_settings(db, agent=agent)
     use_model = (model or settings_["model"]).strip()
     use_temperature = settings_["temperature"] if temperature is None else temperature
     if timeout is None:
-        try:
-            timeout = float((await get_config(db, "llm_timeout_seconds", "45")).strip() or 45)
-        except ValueError:
-            timeout = 45.0
+        timeout = await get_llm_timeout(db, agent)
 
     if settings_["provider"] == "openai_compatible" and settings_["base_url"] and settings_["api_key"]:
         client = _get_openai_client(settings_["base_url"], settings_["api_key"])
@@ -249,8 +350,11 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-async def test_llm_connectivity(db: AsyncSession) -> Dict[str, Any]:
-    """配置连通性自检：最小 Chat 调用 +（若启用）最小 Embedding 调用。"""
+async def test_llm_connectivity(db: AsyncSession, agent: Optional[str] = None) -> Dict[str, Any]:
+    """配置连通性自检：最小 Chat 调用 +（若启用）最小 Embedding 调用。
+
+    agent 传入三个业务 Agent 作用域时按 <agent>_* 独立配置测试（留空项回退全局）。
+    """
     chat: Dict[str, Any] = {}
     started = time.perf_counter()
     try:
@@ -259,6 +363,7 @@ async def test_llm_connectivity(db: AsyncSession) -> Dict[str, Any]:
             [ChatMessage(role="user", content="连接测试：请只回复 pong")],
             temperature=0.0,
             max_tokens=16,
+            agent=agent,
         )
         chat = {
             "ok": True,
@@ -272,6 +377,16 @@ async def test_llm_connectivity(db: AsyncSession) -> Dict[str, Any]:
             "latency_ms": round((time.perf_counter() - started) * 1000.0, 1),
             "error": f"{type(exc).__name__}: {exc}"[:300],
         }
+    if agent:
+        chat["agent"] = agent
+        # 展示该 Agent 实际生效的模型/超时/接入（含继承解析结果），便于管理员核对；
+        # base_url 非敏感可直接回显，API Key 永不回显
+        chat["resolved_model"] = await get_llm_model_name(db, agent=agent)
+        chat["resolved_timeout_seconds"] = await get_llm_timeout(db, agent)
+        resolved_settings = await get_llm_settings(db, agent=agent)
+        chat["resolved_provider"] = resolved_settings["provider"]
+        chat["resolved_base_url"] = resolved_settings["base_url"]
+        chat["access_source"] = resolved_settings["access_source"]
 
     embedding: Dict[str, Any]
     emb_settings = await get_embedding_settings(db)

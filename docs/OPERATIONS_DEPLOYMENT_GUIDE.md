@@ -96,6 +96,8 @@ python scripts/fix_sequences.py
 
 > **诊断墙钟时间预算（Cloudflare 502 防护）**：诊断整体耗时同样走配置中心 `diagnose_time_budget_seconds` 键（默认 `90` 秒，范围 30~600）。多轮 ReAct 推理、强制收尾与单轮降级的时长叠加受该预算约束：余量不足即停止推理转入收尾，预算耗尽跳过 LLM 降级并返回结构化 502（`diagnose_time_budget_exhausted`），避免 LLM 变慢时请求时长叠加越过边缘代理（如 Cloudflare 默认 100s）或 Nginx 超时。生产部署时预算值应小于链路中最短的超时预算（边缘代理 < Nginx `proxy_read_timeout` < 应用内部超时）；经 Cloudflare 代理的部署建议保持默认 90 或更低。修改即时生效并写 `config_update` 审计。
 
+> **Agent 独立 LLM 接入（配置中心）**：诊断 / 知识治理 / 值班三个 Agent 均支持独立 LLM 运行参数，配置键为 `<agent>_llm_provider` / `<agent>_llm_base_url` / `<agent>_llm_api_key` / `<agent>_llm_model` / `<agent>_llm_timeout_seconds`（`<agent>` ∈ `diagnose` / `kb_governance` / `oncall`）及独立温度（`diagnose_temperature` / `kb_governance_temperature` / `oncall_temperature`）。所有键**留空时逐项继承全局 `llm_*` 配置**，可只覆盖其中几项（如仅给诊断 Agent 换 API Key 或 Base URL）；API Key 由服务端 Fernet 加密持久化、脱敏展示。配置中心每个 Agent 分组提供连通性测试（返回解析后的模型/超时/接入方式与 access_source）；全部参数每次请求实时读库，变更即时生效，无需重启。
+
 ### 6.1 RAG 流水线环境变量（/workspace/aiops-rag-system）
 
 RAG 服务为独立进程（经 `src/config.py` 读取环境变量），完整模板见 `aiops-rag-system/.env.example`。与服务间鉴权、多租户隔离相关的核心项（P0）：

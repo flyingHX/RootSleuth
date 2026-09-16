@@ -179,6 +179,7 @@ async def _llm_chat(
     max_tokens: int = 1600,
     temperature: Optional[float] = None,
     timeout: Optional[int] = None,
+    agent: Optional[str] = None,
 ):
     """LLM Chat：模型/温度/接入方式由控制台配置中心驱动（llm_runtime）。
 
@@ -187,9 +188,10 @@ async def _llm_chat(
     timeout 显式传入时覆盖配置中心 llm_timeout_seconds：强制收尾阶段按剩余
     墙钟预算截断单次调用超时，避免收尾调用越过整体预算。
     """
-    effective_timeout = timeout or int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+    if timeout is None:
+        timeout = int(await llm_runtime.get_llm_timeout(db, agent))
     return await llm_runtime.llm_chat(
-        db, messages, max_tokens=max_tokens, timeout=effective_timeout, temperature=temperature
+        db, messages, max_tokens=max_tokens, timeout=timeout, temperature=temperature, agent=agent
     )
 
 
@@ -422,7 +424,7 @@ async def _run_react(
             break
         iterations += 1
         await _flush(db)
-        response = await _llm_chat(db, messages, temperature=temperature)
+        response = await _llm_chat(db, messages, temperature=temperature, agent="diagnose")
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is None:
@@ -508,7 +510,7 @@ async def _conclude_react(
     """
     await _flush(db)
     try:
-        cfg_timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+        cfg_timeout = int(await llm_runtime.get_llm_timeout(db, "diagnose"))
     except (TypeError, ValueError):
         cfg_timeout = 45
     final_messages = messages + [
@@ -526,7 +528,7 @@ async def _conclude_react(
             if remaining < DIAGNOSE_MIN_CONCLUDE_SECONDS:
                 raise ValueError("agent_time_budget_exhausted")
             llm_timeout = max(DIAGNOSE_MIN_CONCLUDE_SECONDS, min(cfg_timeout, int(remaining)))
-        response = await _llm_chat(db, final_messages, temperature=temperature, timeout=llm_timeout)
+        response = await _llm_chat(db, final_messages, temperature=temperature, timeout=llm_timeout, agent="diagnose")
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is not None and payload.get("finish"):
@@ -964,7 +966,7 @@ async def _build_diagnose_snapshot(
     )
     active_rule = rule_result.scalar_one_or_none()
     try:
-        llm_timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+        llm_timeout = int(await llm_runtime.get_llm_timeout(db, "diagnose"))
     except (TypeError, ValueError):
         llm_timeout = 45
     return {
@@ -1000,7 +1002,8 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
         raise HTTPException(status_code=404, detail="事件不存在")
 
     tools = _build_diagnose_tools(db, event)
-    model_name = await llm_runtime.get_llm_model_name(db)
+    # 深度诊断 Agent 独立 LLM 配置：diagnose_llm_model / diagnose_llm_timeout_seconds，留空继承全局
+    model_name = await llm_runtime.get_llm_model_name(db, agent="diagnose")
     # 波动治理：诊断 Agent 固定采样温度（diagnose_temperature，默认 0），重复诊断输出稳定
     diagnose_temperature = await _resolve_diagnose_temperature(db)
     task_prompt = (
@@ -1366,7 +1369,7 @@ async def _draft_kb_cases(
     messages = base_messages
     for _attempt in range(2):
         await _flush(db)
-        response = await _llm_chat(db, messages, max_tokens=3000)
+        response = await _llm_chat(db, messages, max_tokens=3000, agent="kb_governance")
         payload = extract_json_payload(response.content)
         if payload is not None:
             break
@@ -1512,7 +1515,8 @@ async def _run_kb_governance_agent_inner(
         raise HTTPException(status_code=400, detail="time_window 仅支持 1h / 24h / 7d")
     actor = user.email or user.id
     started = time.perf_counter()
-    model_name = await llm_runtime.get_llm_model_name(db)
+    # 知识治理 Agent 独立 LLM 配置：kb_governance_llm_model / kb_governance_temperature / kb_governance_llm_timeout_seconds
+    model_name = await llm_runtime.get_llm_model_name(db, agent="kb_governance")
 
     clusters = await _cluster_recent_events(db, time_window)
     status = "succeeded"
@@ -1752,7 +1756,8 @@ def _validate_oncall_report(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
 async def run_oncall_agent(db: AsyncSession, user: UserResponse, time_window: str) -> Dict[str, Any]:
     """值班 Agent：时间窗影响面汇总 + ChatOps 处置建议，持久化到 oncall_reports。"""
     actor = user.email or user.id
-    model_name = await llm_runtime.get_llm_model_name(db)
+    # 值班 Agent 独立 LLM 配置：oncall_llm_model / oncall_temperature / oncall_llm_timeout_seconds
+    model_name = await llm_runtime.get_llm_model_name(db, agent="oncall")
     window = time_window if time_window in WINDOW_DELTAS_HOURS else "24h"
     since = datetime.now(timezone.utc) - timedelta(hours=WINDOW_DELTAS_HOURS[window])
 
@@ -1785,7 +1790,7 @@ async def run_oncall_agent(db: AsyncSession, user: UserResponse, time_window: st
             report = None
             for _attempt in range(2):
                 await _flush(db)
-                response = await _llm_chat(db, messages, max_tokens=2000)
+                response = await _llm_chat(db, messages, max_tokens=2000, agent="oncall")
                 payload = extract_json_payload(response.content)
                 report = _validate_oncall_report(payload) if payload else None
                 if report is not None:

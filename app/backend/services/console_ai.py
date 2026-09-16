@@ -258,8 +258,9 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
     await db.commit()
     top_score = candidates[0]["score"]
 
-    timeout_seconds = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
-    model_name = await llm_runtime.get_llm_model_name(db)
+    # 单轮诊断/降级路径沿用深度诊断 Agent 的独立 LLM 配置（模型/温度/超时，留空继承全局）
+    timeout_seconds = int(await llm_runtime.get_llm_timeout(db, "diagnose"))
+    model_name = await llm_runtime.get_llm_model_name(db, agent="diagnose")
     messages = build_messages(event, candidates)
     diagnosis: Optional[Dict[str, Any]] = None
     last_error = ""
@@ -271,6 +272,7 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
                     messages,
                     max_tokens=1200,
                     timeout=timeout_seconds,
+                    agent="diagnose",
                 )
                 payload = extract_json_payload(response.content)
                 diagnosis = validate_diagnosis(payload)
@@ -289,7 +291,7 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
             except asyncio.TimeoutError:
                 raise HTTPException(
                     status_code=504,
-                    detail=f"LLM 诊断超时（>{timeout_seconds}s），请稍后重试或调大 llm_timeout_seconds 配置",
+                    detail=f"LLM 诊断超时（>{timeout_seconds}s），请稍后重试或调大 diagnose_llm_timeout_seconds（或全局 llm_timeout_seconds）配置",
                 )
     except HTTPException:
         event.rag_status = _DEGRADED_RAG_STATUS

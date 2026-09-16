@@ -424,7 +424,25 @@ export interface ConfigItem {
 
 /** LLM/Embedding 配置连通性自检结果 */
 export interface LlmTestResult {
-  chat: { ok: boolean; model?: string; latency_ms?: number; sample?: string; error?: string };
+  chat: {
+    ok: boolean;
+    /** 连通性测试使用的 Agent 作用域（全局测试为 undefined） */
+    agent?: string;
+    model?: string;
+    /** 按 Agent 继承规则解析后的实际超时（秒） */
+    resolved_timeout_seconds?: number;
+    /** 按 Agent 继承规则解析后的实际模型 */
+    resolved_model?: string;
+    /** 按 Agent 继承规则解析后的实际接入方式 */
+    resolved_provider?: string;
+    /** 按 Agent 继承规则解析后的实际 Base URL */
+    resolved_base_url?: string;
+    /** 接入来源：agent = Agent 独立配置生效 / global = 继承全局 */
+    access_source?: 'agent' | 'global';
+    latency_ms?: number;
+    sample?: string;
+    error?: string;
+  };
   embedding: {
     enabled: boolean;
     ok?: boolean;
@@ -749,7 +767,14 @@ export const consoleApi = {
   listConfigs: () => invoke<{ items: ConfigItem[] }>('/api/v1/console/configs'),
   updateConfig: (key: string, value: string) =>
     invoke<{ key: string; value: string }>('/api/v1/console/configs', 'PUT', { key, value }),
-  testLlmConfig: () => invoke<LlmTestResult>('/api/v1/console/configs/llm-test', 'POST', {}),
+  testLlmConfig: (agent?: string) =>
+    invoke<LlmTestResult>(
+      agent
+        ? `/api/v1/console/configs/llm-test?agent=${encodeURIComponent(agent)}`
+        : '/api/v1/console/configs/llm-test',
+      'POST',
+      {},
+    ),
 
   // Agent：诊断 / 知识治理 / 值班
   agentDiagnose: (eventId: number) =>

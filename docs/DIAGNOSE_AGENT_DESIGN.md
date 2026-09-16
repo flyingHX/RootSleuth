@@ -285,7 +285,7 @@ event.degraded_reason = None if confidence >= threshold else f"low_confidence(<{
 
 ## 8. LLM 配置接入
 
-与知识治理/值班 Agent 共用 `llm_runtime`（详见《知识治理 Agent 现状设计说明书》§9）：`llm_provider`（atoms_hub 默认 / openai_compatible）、`llm_base_url`、`llm_api_key`（Fernet 加密）、`llm_model`（默认 `deepseek-v4-flash`）、`llm_temperature`（默认 0.2）、`llm_timeout_seconds`（默认 45，范围 10~300）。全部参数每次请求实时读库，配置变更立即生效。
+与知识治理/值班 Agent 共用 `llm_runtime`（每次请求实时读库，配置变更立即生效）。三个 Agent 均支持**独立 LLM 接入配置**：`diagnose_llm_provider` / `diagnose_llm_base_url` / `diagnose_llm_api_key`（留空逐项继承全局 `llm_provider` / `llm_base_url` / `llm_api_key`；atoms_hub 默认 / openai_compatible；api_key Fernet 加密、脱敏展示），支持诊断 Agent 单独切换自建网关而不影响其他 Agent。模型/温度/超时同样独立：`diagnose_llm_model`（留空继承全局，默认 `deepseek-v4-flash`）、`diagnose_temperature`（默认 0）、`diagnose_llm_timeout_seconds`（留空继承全局，默认 45，范围 10~300）。配置中心提供按 Agent 连通性测试（`POST /api/v1/console/configs/llm-test?agent=diagnose`），返回 `resolved_model` / `resolved_provider` / `resolved_base_url` / `resolved_timeout_seconds` / `access_source`（agent|global），API Key 永不回显。
 
 **诊断独立温度覆盖（波动治理）**：诊断 Agent 额外引入独立配置键 `diagnose_temperature`（默认 `0`），ReAct 推理、格式纠错与超限强制收尾的全部 LLM 调用统一使用该温度（`_run_react`/`_conclude_react` 全链路透传），与治理/值班 Agent 使用的 `llm_temperature`（0.2）相互独立。默认 0 保证同一事件重复深度诊断输出稳定；如需更强的多路径探索可调高（合法范围 clamp 到 [0, 2]，空/非法值回退 0）。
 
@@ -431,7 +431,8 @@ API 封装：`consoleApi.agentDiagnose(eventId)` → `POST /api/v1/console/agent
 | `diagnose_time_budget_seconds` | `90` | 诊断墙钟预算（30~600）：多轮推理+强制收尾总时长上限，余量不足停止推理/跳过降级，预算耗尽返回结构化 502（防 LLM 变慢时请求越过边缘代理超时） |
 | `confidence_threshold` | `0.75` | 低置信度判定阈值 |
 | `embedding_base_url` / `embedding_api_key` / `embedding_model` | 空（未启用） | 单轮诊断 Embedding 加分开关 |
-| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 接入方式 |
+| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 全局默认接入方式（诊断 Agent 未配置独立项时生效） |
+| `diagnose_llm_provider` / `diagnose_llm_base_url` / `diagnose_llm_api_key` | 空 | 诊断 Agent 独立接入（留空逐项继承全局；api_key Fernet 加密、脱敏展示） |
 
 ## 附录 B：复现命令（演示环境）
 

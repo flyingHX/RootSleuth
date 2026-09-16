@@ -861,15 +861,20 @@ start_services_with_retry() {
             # Use API-based environment variable processing
             process_env_with_placeholders "$LOCAL_IP" "$BACKEND_PORT" "$FRONTEND_PORT" "$LOCAL_MODE"
         fi
-        # Ensure IS_LAMBDA is always set to false for local development
+        # Ensure IS_LAMBDA is always false; ENVIRONMENT defaults to dev but respects caller/.env value（production 禁用 --reload）
         export IS_LAMBDA=false
-        export ENVIRONMENT=dev
-        log_info "Ensured IS_LAMBDA=$IS_LAMBDA and ENVIRONMENT=$ENVIRONMENT for local development"
+        export ENVIRONMENT="${ENVIRONMENT:-dev}"
+        log_info "Ensured IS_LAMBDA=$IS_LAMBDA and ENVIRONMENT=$ENVIRONMENT"
 
-        # Start backend service
+        # Start backend service（production 禁用 --reload，防止文件监听导致进程空窗触发网关 502）
         log_info "Starting Backend service...$BACKEND_PORT"
-        uvicorn main:app --host 0.0.0.0 --port $BACKEND_PORT --reload --reload-exclude "*.log" --reload-exclude "*.pyc" &
-        BACKEND_RELOADER_PID=$!  # Parent process (reloader)
+        UVICORN_RELOAD_ARGS=(--reload --reload-exclude "*.log" --reload-exclude "*.pyc")
+        if [ "$ENVIRONMENT" = "production" ]; then
+            log_info "ENVIRONMENT=production: disabling uvicorn --reload"
+            UVICORN_RELOAD_ARGS=()
+        fi
+        uvicorn main:app --host 0.0.0.0 --port $BACKEND_PORT "${UVICORN_RELOAD_ARGS[@]}" &
+        BACKEND_RELOADER_PID=$!  # uvicorn 主进程（production）或 reloader 父进程（dev）
 
         # Wait for backend to start
         log_info "Waiting for Backend service to start..."

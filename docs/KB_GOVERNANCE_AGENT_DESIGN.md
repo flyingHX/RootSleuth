@@ -317,9 +317,10 @@ flowchart TD
 | `llm_provider` | `atoms_hub` | `atoms_hub`（平台 AIHub 回退）/ `openai_compatible` |
 | `llm_base_url` | 空 | openai_compatible 模式必填 |
 | `llm_api_key` | 空 | **Fernet 加密持久化**（`enc:<token>`，密钥派生自 `CONSOLE_SECRET_KEY`/`JWT_SECRET_KEY`），展示一律脱敏 `mask_secret` |
-| `llm_model` | `deepseek-v4-flash` | Chat 模型名（诊断与三类 Agent 共用） |
+| `llm_model` | `deepseek-v4-flash` | Chat 模型名（全局默认，Agent 可独立覆盖） |
 | `llm_temperature` | `0.2` | clamp [0, 2] |
 | `llm_timeout_seconds` | `45` | 10~300 整数 |
+| `<agent>_llm_provider` / `<agent>_llm_base_url` / `<agent>_llm_api_key` | 空 | 三个 Agent 独立接入配置（留空逐项继承全局 llm_*；api_key Fernet 加密、脱敏展示），支持单个 Agent 单独切换自建网关 |
 
 接入逻辑（`llm_chat`）：
 
@@ -535,7 +536,9 @@ Agent 运行链路已恢复正常；此前的"结果为空"是**幂等保护与�
 | `llm_model` | `deepseek-v4-flash` | 起草用模型 |
 | `llm_timeout_seconds` | `45` | LLM 调用超时 |
 | `llm_temperature` | `0.2` | 采样温度 |
-| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 接入方式 |
+| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 全局默认接入方式 |
+| `kb_governance_llm_model` / `kb_governance_temperature` / `kb_governance_llm_timeout_seconds` | 空 | 治理 Agent 独立模型/温度/超时（留空继承全局） |
+| `kb_governance_llm_provider` / `kb_governance_llm_base_url` / `kb_governance_llm_api_key` | 空 | 治理 Agent 独立接入（留空逐项继承全局） |
 | `default_role` / `role_bindings_json` | `viewer` | 权限解析 |
 
 ## 附录 B：复现命令（演示环境）

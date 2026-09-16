@@ -118,12 +118,16 @@
 | rerank_weight_json | 重排权重（cosine/topology/time_decay/feedback） |
 | diagnose_temperature | 诊断 Agent 独立采样温度（默认 0：同一事件重复深度诊断输出稳定；治理/值班 Agent 仍使用 llm_temperature=0.2） |
 | diagnose_time_budget_seconds | 诊断墙钟时间预算（30~600 秒，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级/返回 502，防止 LLM 变慢时请求无限拉长 |
-| llm_timeout_seconds | LLM 诊断超时（10~300 秒） |
+| llm_provider / llm_base_url / llm_api_key / llm_model / llm_temperature / llm_timeout_seconds | LLM 全局默认接入与模型参数（三个 Agent 独立配置留空时逐项继承；API Key 加密存储、脱敏展示） |
+| diagnose_llm_provider / diagnose_llm_base_url / diagnose_llm_api_key | 诊断 Agent 独立 LLM 接入：接入方式（atoms_hub / openai_compatible）+ OpenAI 兼容 Base URL + API Key（留空逐项继承全局；API Key 加密存储、脱敏展示） |
+| diagnose_llm_model / diagnose_llm_timeout_seconds | 诊断 Agent 独立模型与单次调用超时（10~300 秒；留空继承全局） |
+| kb_governance_llm_provider / kb_governance_llm_base_url / kb_governance_llm_api_key / kb_governance_llm_model / kb_governance_temperature / kb_governance_llm_timeout_seconds | 知识治理 Agent 独立接入与模型参数（留空逐项继承全局，可只覆盖其中几项） |
+| oncall_llm_provider / oncall_llm_base_url / oncall_llm_api_key / oncall_llm_model / oncall_temperature / oncall_llm_timeout_seconds | 值班 Agent 独立接入与模型参数（留空逐项继承全局，可只覆盖其中几项） |
 | feature_flags_json | 功能开关（auto_diagnose/dedup_scan） |
 | default_role | 未绑定用户默认角色 |
 | role_bindings_json | 邮箱 → 角色绑定映射 |
 
-- 修改即时生效并写 `config_update` 审计。
+- 修改即时生效并写 `config_update` 审计。三个 Agent 分组均提供「测试连通性」按钮（`POST /api/v1/console/configs/llm-test?agent=diagnose|kb_governance|oncall`），返回按继承规则解析后的实际模型/超时/接入方式与 `access_source`（agent=独立配置生效 / global=继承全局），API Key 永不回显。
 
 ## 8. 帮助中心
 

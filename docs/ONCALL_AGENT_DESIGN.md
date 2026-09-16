@@ -292,7 +292,7 @@ erDiagram
 
 ## 10. LLM 配置接入
 
-与另外两个 Agent 共用 `llm_runtime`（配置中心实时读库）：`llm_provider`（atoms_hub 默认 / openai_compatible）、`llm_model`（默认 `deepseek-v4-flash`）、`llm_temperature`（0.2）、`llm_timeout_seconds`（45）。详见《知识治理 Agent 现状设计说明书》§9。
+与另外两个 Agent 共用 `llm_runtime`（配置中心实时读库，配置变更立即生效）。全局默认：`llm_provider`（atoms_hub 默认 / openai_compatible）、`llm_model`（默认 `deepseek-v4-flash`）、`llm_temperature`（0.2）、`llm_timeout_seconds`（45）。值班 Agent 支持独立覆盖（留空逐项继承全局）：`oncall_llm_provider` / `oncall_llm_base_url` / `oncall_llm_api_key`（独立接入，可单独切换自建网关）、`oncall_llm_model`、`oncall_temperature`、`oncall_llm_timeout_seconds`。详见《知识治理 Agent 现状设计说明书》§9。
 
 ---
 
@@ -382,7 +382,9 @@ API 封装：`consoleApi.agentOncallReport(timeWindow)` / `consoleApi.listOncall
 | `llm_model` | `deepseek-v4-flash` | 报告生成模型 |
 | `llm_timeout_seconds` | `45` | 单次调用超时 |
 | `llm_temperature` | `0.2` | 采样温度 |
-| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 接入方式 |
+| `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 全局默认接入方式 |
+| `oncall_llm_provider` / `oncall_llm_base_url` / `oncall_llm_api_key` | 空 | 值班 Agent 独立接入（留空逐项继承全局） |
+| `oncall_llm_model` / `oncall_temperature` / `oncall_llm_timeout_seconds` | 空 | 值班 Agent 独立模型/温度/超时（留空继承全局） |
 
 ## 附录 B：复现命令（演示环境）
 
