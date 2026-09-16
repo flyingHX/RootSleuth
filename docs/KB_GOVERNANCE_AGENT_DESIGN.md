@@ -103,14 +103,19 @@ flowchart TD
       }
     ],
     "drafts_submitted": [
-      {"case_id": "KB-20260914-001", "approval_request_id": 7, "auto_published": false, "alert_template": "..."}
+      {"case_id": "KB-20260914-001", "approval_request_id": 7, "auto_published": false, "alert_template": "...", "quality": {"faithfulness": 0.8, "context_coverage": 0.5, "answer_relevance": 0.4, "hallucination_rate": 0.2, "trust_index": 0.72, "num_claims": 5, "unsupported_claims": [], "quality_ok": false, "gate_line": 0.85}}
     ],
     "drafts_skipped": [
-      {"alert_template": "...", "reason": "已存在同模板案例或在途新建变更集"}
+      {"alert_template": "...", "quality": null, "reason": "已存在同模板案例或在途新建变更集"}
     ],
     "merge_result": {
       "proposal_id": 4, "master_case_id": "KB-001", "merged_case_ids": ["KB-008"],
       "approval_request_id": 6, "auto_merged": false
+    },
+    "quality": {
+      "faithfulness": 0.8, "context_coverage": 0.5, "answer_relevance": 0.4,
+      "hallucination_rate": 0.2, "trust_index": 0.72,
+      "sample_count": 1, "quality_ok_rate": 0.0, "quality_ok": false, "gate_line": 0.85
     },
     "model": "deepseek-v4-flash",
     "duration_ms": 1508.92
@@ -351,15 +356,15 @@ flowchart TD
 | `model` | 当前 LLM 模型名 |
 | `iterations` | `len(drafts) + 1`（草稿数+聚类轮的近似步数） |
 | `duration_ms` | 端到端耗时 |
-| `tool_trace` | 固定四步轨迹 JSON（≤20000 字符）：`cluster_events` → `ai_draft`（失败时记录错误）→ `submit_change_sets`（submitted/skipped 计数）→ `merge_proposal`（结果） |
-| `result_json` | 完整 governance 结果（`time_window` / `analysis` / `clusters` / `drafts_submitted` / `drafts_skipped` / `merge_result`，≤20000 字符） |
+| `tool_trace` | 固定五步轨迹 JSON（≤20000 字符）：`cluster_events` → `ai_draft`（失败时记录错误）→ `submit_change_sets`（submitted/skipped 计数）→ `draft_quality`（聚合 Trust Index 与样本数）→ `merge_proposal`（结果） |
+| `result_json` | 完整 governance 结果（`time_window` / `analysis` / `clusters` / `drafts_submitted` / `drafts_skipped` / `merge_result` / `quality` 聚合质量指标，≤20000 字符） |
 | `error_message` | 降级原因（≤500 字符），成功为 null |
 | `actor` | 触发人（邮箱或用户 ID） |
 | `summary` | 人读摘要（≤300 字符），如 *"[近 24 小时] 聚类 2 簇，起草 0 条案例，合并提案 已提交"* |
 
 ### 11.2 审计日志
 
-会话落库后写 `audit_logs`：`action="agent_kb_governance"`、`target_type="agent_session"`、`target_id=<session.id>`、`after={clusters 数, drafts_submitted case_id 列表, merge_proposal_id, status}`。变更集创建、审批动作、发布、合并各自另有独立审计条目，形成完整操作链。
+会话落库后写 `audit_logs`：`action="agent_kb_governance"`、`target_type="agent_session"`、`target_id=<session.id>`、`after={clusters 数, drafts_submitted case_id 列表, merge_proposal_id, trust_index, status}`。变更集创建、审批动作、发布、合并各自另有独立审计条目，形成完整操作链。
 
 ### 11.3 事务边界
 
@@ -430,7 +435,7 @@ erDiagram
 3. **结果展示**：成功 toast 显示会话摘要；卡片展示——
    - 簇分析：AI `analysis` 文本；
    - 簇表格：模板 / 次数 / 服务 / 集群 / 严重度分布 / 样本日志；
-   - 起草结果：`drafts_submitted`（案例 ID + 审批单号）与 `drafts_skipped`（含跳过原因）；
+   - 起草结果：`drafts_submitted`（案例 ID + 审批单号 + 单条草稿质量）与 `drafts_skipped`（含跳过原因与质量）；聚合质量卡展示 Trust Index、达标率与样本数（口径说明见质量指标卡）。
    - 合并提案：proposal ID / 主案例 / 被合并案例 / 审批单号或跳过原因；
 4. **历史回显**：页面加载时经 `GET /sessions?session_type=kb_governance&limit=1` 还现最近一次持久化结果（`parseGovernanceSession`），刷新无需重跑；
 5. **会话轨迹 Tab**：查看所有会话的状态 / 模型 / 迭代数 / 耗时 / 轨迹 / 结果 JSON；

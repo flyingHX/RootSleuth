@@ -45,7 +45,7 @@ from services.console_ai import (
     score_case,
 )
 from services.console_common import get_config, mask_sensitive, now_iso, write_audit
-from services.quality_scan import evaluate_diagnosis_quality
+from services.quality_scan import GATE_LINE, evaluate_diagnosis_quality
 
 logger = logging.getLogger(__name__)
 
@@ -937,6 +937,73 @@ KB_DRAFT_REQUIRED_FIELDS = ("error_type", "service_name", "alert_template", "roo
 WINDOW_LABELS = {"1h": "近 1 小时", "24h": "近 24 小时", "7d": "近 7 天"}
 
 
+# ------------------ Agent 生成质量指标（与诊断质量同一口径） ------------------
+
+def _evaluate_agent_quality(
+    query: Dict[str, str], answer: str, contexts: List[Dict[str, str]]
+) -> Optional[Dict[str, Any]]:
+    """包装 evaluate_diagnosis_quality：空答案返回 None，评估异常静默降级，不阻塞 Agent 主流程。"""
+    text = (answer or "").strip()
+    if not text:
+        return None
+    try:
+        return evaluate_diagnosis_quality(query, text, contexts)
+    except Exception:  # noqa: BLE001 - 质量评估失败仅影响指标展示
+        return None
+
+
+def _draft_quality_evaluate(draft: Dict[str, Any], clusters: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """评估 AI 起草案例质量：grounding = 命中告警簇的模板与样本日志（已脱敏）。"""
+    template = str(draft.get("alert_template") or "")
+    matched = next((c for c in clusters if c.get("template") == template), None)
+    evidence_template = str((matched or {}).get("template") or template)
+    sample_log = str((matched or {}).get("sample_raw_log") or "")
+    query = {
+        "template": evidence_template,
+        "error_type": str(draft.get("error_type") or ""),
+        "service_name": str(draft.get("service_name") or ""),
+    }
+    answer = f"{draft.get('root_cause') or ''}。{draft.get('solution') or ''}"
+    contexts = [{"alert_template": evidence_template, "root_cause": "", "solution": sample_log}]
+    return _evaluate_agent_quality(query, answer, contexts)
+
+
+def _oncall_quality_evaluate(
+    window: str, report: Dict[str, Any], stats: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """评估值班报告质量：grounding = CMDB 影响面（系统/服务/负责人）与告警窗口。"""
+    answer = "；".join(
+        [str(report.get("impact_summary") or ""), *[str(a) for a in report.get("actions") or []]]
+    )
+    contexts = [
+        {
+            "alert_template": str(item.get("system") or ""),
+            "root_cause": " ".join(str(svc.get("service") or "") for svc in item.get("services") or []),
+            "solution": " ".join(str(o) for o in item.get("owners") or []),
+        }
+        for item in stats.get("affected_systems") or []
+    ]
+    query = {"template": f"值班报告 {window} 影响面与处置建议", "error_type": "", "service_name": ""}
+    return _evaluate_agent_quality(query, answer, contexts)
+
+
+def _aggregate_agent_quality(qualities: List[Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    """聚合多次生成质量样本：均值指标 + 达标率；无样本返回 None（前端不渲染质量卡）。"""
+    samples = [q for q in qualities if isinstance(q, dict) and "trust_index" in q]
+    if not samples:
+        return None
+    keys = ("faithfulness", "context_coverage", "answer_relevance", "hallucination_rate", "trust_index")
+    agg: Dict[str, Any] = {
+        key: round(sum(float(s.get(key) or 0) for s in samples) / len(samples), 4) for key in keys
+    }
+    agg["sample_count"] = len(samples)
+    ok_count = sum(1 for s in samples if s.get("quality_ok"))
+    agg["quality_ok_rate"] = round(ok_count / len(samples), 4)
+    agg["quality_ok"] = bool(agg["trust_index"] >= GATE_LINE)
+    agg["gate_line"] = GATE_LINE
+    return agg
+
+
 async def _cluster_recent_events(db: AsyncSession, time_window: str = "24h") -> List[Dict[str, Any]]:
     """按模板聚类指定时间窗（1h/24h/7d，默认 24h）内告警，返回规模最大的簇（最多 3 个）。"""
     since = datetime.now(timezone.utc) - timedelta(hours=WINDOW_DELTAS_HOURS.get(time_window, 24))
@@ -1186,10 +1253,13 @@ async def _run_kb_governance_agent_inner(
 
     drafts_submitted: List[Dict[str, Any]] = []
     drafts_skipped: List[Dict[str, Any]] = []
+    draft_qualities: List[Optional[Dict[str, Any]]] = []
     for draft in drafts:
+        draft_quality = _draft_quality_evaluate(draft, clusters)
+        draft_qualities.append(draft_quality)
         fields = {key: draft[key] for key in ("error_type", "service_name", "cluster", "alert_template", "root_cause", "solution", "topology_snapshot") if draft.get(key)}
         if await _template_case_exists(db, fields.get("alert_template", "")):
-            drafts_skipped.append({"alert_template": fields.get("alert_template"), "reason": "已存在同模板案例或在途新建变更集"})
+            drafts_skipped.append({"alert_template": fields.get("alert_template"), "quality": draft_quality, "reason": "已存在同模板案例或在途新建变更集"})
             continue
         try:
             outcome = await console_kb.create_change_set(
@@ -1208,11 +1278,13 @@ async def _run_kb_governance_agent_inner(
                     "approval_request_id": outcome.get("approval_request_id"),
                     "auto_published": outcome.get("auto_published", False),
                     "alert_template": fields.get("alert_template"),
+                    "quality": draft_quality,
                 }
             )
         except HTTPException as exc:
-            drafts_skipped.append({"alert_template": fields.get("alert_template"), "reason": f"提交失败: {exc.detail}"})
+            drafts_skipped.append({"alert_template": fields.get("alert_template"), "quality": draft_quality, "reason": f"提交失败: {exc.detail}"})
 
+    draft_quality_agg = _aggregate_agent_quality(draft_qualities)
     merge_result: Dict[str, Any]
     try:
         merge_result = await _auto_merge_proposal(db, user)
@@ -1235,11 +1307,13 @@ async def _run_kb_governance_agent_inner(
             "drafts_submitted": drafts_submitted,
             "drafts_skipped": drafts_skipped,
             "merge_result": merge_result,
+            "quality": draft_quality_agg,
         },
         trace=[
             {"step": "cluster_events", "clusters": len(clusters)},
             {"step": "ai_draft", "drafts": len(drafts), "status": "ok" if not error_message else error_message},
             {"step": "submit_change_sets", "submitted": len(drafts_submitted), "skipped": len(drafts_skipped)},
+            {"step": "draft_quality", "trust_index": (draft_quality_agg or {}).get("trust_index"), "samples": (draft_quality_agg or {}).get("sample_count", 0)},
             {"step": "merge_proposal", "result": merge_result},
         ],
         iterations=len(drafts) + 1,
@@ -1258,6 +1332,7 @@ async def _run_kb_governance_agent_inner(
             "clusters": len(clusters),
             "drafts_submitted": [d["case_id"] for d in drafts_submitted],
             "merge_proposal_id": merge_result.get("proposal_id"),
+            "trust_index": (draft_quality_agg or {}).get("trust_index"),
             "status": status,
         },
     )
@@ -1272,6 +1347,7 @@ async def _run_kb_governance_agent_inner(
             "drafts_submitted": drafts_submitted,
             "drafts_skipped": drafts_skipped,
             "merge_result": merge_result,
+            "quality": draft_quality_agg,
             "model": model_name,
             "duration_ms": round(elapsed, 2),
         },
@@ -1462,6 +1538,11 @@ async def run_oncall_agent(db: AsyncSession, user: UserResponse, time_window: st
             "chatops_text": f"【值班告警汇总】时间窗: {window}，窗口内无告警。",
         }
 
+    # 生成质量指标（与诊断/知识治理同一口径）：grounding = CMDB 影响面；无告警窗口不计质量
+    report_quality = _oncall_quality_evaluate(window, report, stats) if events else None
+    if report_quality is not None:
+        report["quality"] = report_quality
+
     report_row = Oncall_reports(
         time_window=window,
         event_count=len(events),
@@ -1483,11 +1564,12 @@ async def run_oncall_agent(db: AsyncSession, user: UserResponse, time_window: st
         status=status,
         model=model_name,
         event_id=None,
-        result={"report_id": report_row.id, "priority": report["priority"], "impact_summary": report["impact_summary"]},
+        result={"report_id": report_row.id, "priority": report["priority"], "impact_summary": report["impact_summary"], "quality": report_quality},
         trace=[
             {"step": "aggregate_window", "window": window, "events": len(events)},
             {"step": "cmdb_mapping", "systems": len(stats["affected_systems"]), "unmapped": list(stats["unmapped_services"])},
             {"step": "ai_report", "status": "ok" if not error_message else error_message},
+            {"step": "report_quality", "trust_index": (report_quality or {}).get("trust_index"), "sample_count": (report_quality or {}).get("sample_count", 1 if report_quality else 0)},
         ],
         iterations=3,
         elapsed_ms=(time.perf_counter() - started) * 1000.0,
@@ -1503,7 +1585,7 @@ async def run_oncall_agent(db: AsyncSession, user: UserResponse, time_window: st
         action="agent_oncall_report",
         target_type="oncall_report",
         target_id=report_row.id,
-        after={"window": window, "events": len(events), "priority": report["priority"], "status": status},
+        after={"window": window, "events": len(events), "priority": report["priority"], "trust_index": (report_quality or {}).get("trust_index"), "status": status},
     )
     return {
         "status": status,

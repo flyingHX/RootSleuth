@@ -71,7 +71,9 @@
 
 | 指标 | 参考基准 | 现状评级 | 说明 |
 |------|---------|---------|------|
-| Trust Index（T = 0.4F + 0.35C + 0.25(1-P)） | 无统一值，看趋势 | 🔴 无法计算 | F（忠实度）、C（引用准确率）、P（幻觉率）均无度量管道。参考区间 0.73-0.81 仅在 TruthfulQA 类基准上有区分度，本项目无对应测试集 |
+| Trust Index（T = 0.4F + 0.35C + 0.25(1-P)） | 无统一值，看趋势 | 🟡 单次链路已内置，批量基准未建设 | P1-1 落地后，每次诊断 / 知识治理草稿 / 值班报告均由启发式比对器输出 F/C/P 与 Trust Index（实现中引用口径以 Context Coverage 度量），写入响应、`agent_sessions.result_json`、`report_json` 与审计，Prometheus Gauges（rag_quality_*）可观测，单次质量线 0.85；大规模离线批量评测与 TruthfulQA 类基准测试集仍未建设 |
+
+> **口径说明（Trust Index vs 置信度）**：控制台示例中 Trust Index 72.1% 与置信度 86% 并存不矛盾——置信度是模型对根因结论的**主观自评把握度**（阈值 0.75），Trust Index 是生成内容与检索证据一致性的**客观质量分**（质量线 0.85）。二者统计对象不同：高置信 + 低 Trust Index 说明模型自信但断言缺证据支撑，需人工复核。
 
 **已具备的可观测基础**（可复用于质量指标扩展）：Prometheus 指标 rag_latency/rag_stage_latency（分阶段 P99）、rerank_layer_latency、rerank_degraded_total（分层降级事件）、rerank_final_total（漏斗出口分布）、rag_embed_fallback_total（Embedding 降级）、dedup_reduction_rate。这些是**性能/可用性**指标，质量维度（F/C/P）需新增。
 

@@ -532,6 +532,8 @@ export interface AgentDraftOutcome {
   auto_published?: boolean;
   alert_template?: string;
   reason?: string;
+  /** 该条草稿的生成质量评估（Trust Index 口径，与诊断一致） */
+  quality?: QualityMetrics | null;
 }
 
 export interface AgentKbGovernanceResult {
@@ -545,6 +547,8 @@ export interface AgentKbGovernanceResult {
     drafts_submitted: AgentDraftOutcome[];
     drafts_skipped: AgentDraftOutcome[];
     merge_result: Record<string, unknown>;
+    /** 本次起草案例的质量聚合（样本均值 + 达标率；无样本为 null） */
+    quality?: QualityMetrics | null;
     model: string;
     duration_ms: number;
   };
@@ -575,6 +579,8 @@ export interface AgentOncallReportResult {
     actions: string[];
     owners_to_notify: string[];
     chatops_text: string;
+    /** 报告生成质量评估（Trust Index 口径；无告警窗口为 null） */
+    quality?: QualityMetrics | null;
   };
 }
 
@@ -618,7 +624,7 @@ export interface OncallReportRecord {
   warning_count: number;
   info_count: number;
   affected_systems: AgentAffectedSystem[];
-  report: { impact_summary: string; priority: string; actions: string[]; owners_to_notify: string[]; chatops_text: string } | null;
+  report: { impact_summary: string; priority: string; actions: string[]; owners_to_notify: string[]; chatops_text: string; quality?: QualityMetrics | null } | null;
   chatops_text: string | null;
   session_id: number | null;
   actor: string | null;

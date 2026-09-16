@@ -187,6 +187,16 @@ User Prompt 携带：时间窗 + 完整统计 JSON（`_aggregate_oncall` 输出�
 | `priority` | 大写化；不在 {P0,P1,P2,P3} 内回退 **P1** |
 | `actions` / `owners_to_notify` | 列表逐项 str/strip，各截前 10 条 |
 
+### 5.4 报告质量评估（Trust Index 口径）
+
+AI 报告生成成功后，立即用与诊断质量同一套启发式比对器（`quality_scan.evaluate_diagnosis_quality`）评估报告质量：
+
+- **Grounding 构造**：CMDB 影响面（系统 / 服务 / 负责人桶）+ 告警窗口摘要作为证据上下文；报告的影响面摘要与处置动作作为待检断言；
+- **指标**：Faithfulness / Context Coverage / Answer Relevance / 幻觉率 → `Trust Index = 0.4×Faithfulness + 0.35×Context Coverage + 0.25×(1−幻觉率)`（实现中引用口径以 Context Coverage 度量），单次质量线 **0.85**（`GATE_LINE`）；
+- **写入口径**：质量块写入 `report_json.quality`（当前报告与历史报告 API 均返回）与 `agent_sessions.result_json.quality`，审计 `after` 附带 `trust_index`；
+- **边界**：空告警窗口不评估（`quality=null`）；评估异常静默降级，不影响报告持久化；
+- **与置信度的区别**：值班报告没有置信度自评；Trust Index 是"断言是否能在 CMDB 影响面/告警统计中找到依据"的客观质量分，与诊断 Agent 的主观置信度独立衡量、不构成矛盾。
+
 ---
 
 ## 6. 确定性降级报告 `_deterministic_oncall_report`
@@ -228,7 +238,7 @@ AI 失败（超时 / 网络 / 持续非法输出）时的兜底报告，纯代�
 | `time_window` | 实际生效窗口（24h 等） |
 | `event_count` / `critical_count` / `warning_count` / `info_count` | 窗口统计 |
 | `affected_systems` | 聚合结果 JSON（含每系统桶） |
-| `report_json` | 报告 JSON（AI 或确定性） |
+| `report_json` | 报告 JSON（AI 或确定性）；窗口内有事件时额外携带 `quality` 质量指标块（见 5.4） |
 | `chatops_text` | 群消息文本（冗余存储，列表页直读） |
 | `session_id` | **先落报告（flush 拿到 id）→ 落会话 → 回写 session_id → commit**，双向关联 |
 | `actor` | 触发人（邮箱或 ID） |
@@ -241,12 +251,12 @@ AI 失败（超时 / 网络 / 持续非法输出）时的兜底报告，纯代�
 | `status` | `succeeded` / `degraded` |
 | `iterations` | 固定 `3`（对应三步轨迹） |
 | `tool_trace` | `aggregate_window`（窗口/事件数）→ `cmdb_mapping`（系统数 + 未登记服务列表）→ `ai_report`（ok 或错误信息） |
-| `result_json` | `{report_id, priority, impact_summary}`（轻量引用，报告全文在 oncall_reports） |
+| `result_json` | `{report_id, priority, impact_summary, quality}`（轻量引用 + 质量指标，报告全文在 oncall_reports） |
 | `summary` | `"{priority}：{impact_summary 前 200 字}"` |
 
 ### 8.3 审计
 
-`write_audit`：`action=agent_oncall_report`、`target_type=oncall_report`、`target_id=报告 id`、`after={window, events, priority, status}`。
+`write_audit`：`action=agent_oncall_report`、`target_type=oncall_report`、`target_id=报告 id`、`after={window, events, priority, trust_index, status}`。
 
 ---
 

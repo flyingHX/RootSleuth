@@ -227,10 +227,22 @@ event.degraded_reason = None if confidence >= threshold else f"low_confidence(<{
 
 `threshold` 来自配置中心 `confidence_threshold`（默认 **0.75**）。低置信度不阻断流程——事件仍标记 `diagnosed`，但 `degraded_reason` 留痕，控制台展示"低置信度"徽标，提示人工复核。
 
+### 6.2.1 置信度与 Trust Index 口径区分
+
+| 维度 | 置信度（confidence） | Trust Index |
+|------|---------------------|-------------|
+| 统计对象 | 模型对**本次根因结论**的自评把握度 | 生成内容与检索证据的**客观一致性评分** |
+| 计算来源 | LLM 输出的 self-rated 置信度字段（六信号评分） | `T = 0.4×Faithfulness + 0.35×Citation Accuracy + 0.25×(1−幻觉率)`（启发式比对器；实现中引用口径以 Context Coverage 度量） |
+| 判定阈值 | `confidence_threshold` = 0.75（低于即提示人工复核） | `GATE_LINE` = 0.85（单次质量线，与运维告警线一致） |
+| 语义 | 主观概率："我认为根因是 X 的可能性有多大" | 客观质量："结论的每个断言是否都能在召回案例/日志中找到依据" |
+| 典型矛盾场景 | 高置信度 + 低 Trust Index：模型对错误结论很自信，断言缺证据支撑 | 低置信度 + 高 Trust Index：结论谨慎但每条断言均有引用，可放心采信 |
+
+两者**独立衡量、不构成矛盾**。控制台在 Agent 结论卡片同时展示置信度徽标与质量评估卡，任一未达标均建议人工复核。同一口径已复用于知识治理 Agent（起草案例质量）与值班 Agent（报告质量）。
+
 ### 6.3 会话与审计
 
-- `_save_session`：`session_type=diagnose`、`status=succeeded`、`model`、`event_id`、`result={conclusion, threshold}`、`tool_trace`（完整每轮轨迹，≤20000 字符）、`iterations`、`duration_ms`、`actor`、`summary=root_cause[:300]`；
-- `write_audit`：`action=agent_diagnose`、`target_type=event`、`target_id=事件主键`、`after={session_id, model, iterations, confidence, low_confidence}`。
+- `_save_session`：`session_type=diagnose`、`status=succeeded`、`model`、`event_id`、`result={conclusion, threshold, quality}`、`tool_trace`（完整每轮轨迹，≤20000 字符）、`iterations`、`duration_ms`、`actor`、`summary=root_cause[:300]`；
+- `write_audit`：`action=agent_diagnose`、`target_type=event`、`target_id=事件主键`、`after={session_id, model, iterations, confidence, low_confidence, trust_index}`。
 
 ---
 

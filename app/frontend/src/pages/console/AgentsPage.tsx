@@ -100,6 +100,7 @@ function parseGovernanceSession(session: AgentSession | null | undefined): Agent
     drafts_submitted: Array.isArray(r.drafts_submitted) ? (r.drafts_submitted as AgentDraftOutcome[]) : [],
     drafts_skipped: Array.isArray(r.drafts_skipped) ? (r.drafts_skipped as AgentDraftOutcome[]) : [],
     merge_result: (r.merge_result ?? {}) as Record<string, unknown>,
+    quality: (r.quality ?? null) as QualityMetrics | null,
     model: session.model,
     duration_ms: session.duration_ms ?? 0,
   };
@@ -252,7 +253,7 @@ function DiagnoseTab() {
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <QualityMetricsCard quality={result.agent.quality} title="Agent 诊断质量评估" />
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs text-muted-foreground">置信度</span>
                     <ConfidenceBadge
                       value={result.agent.conclusion.confidence}
@@ -264,6 +265,9 @@ function DiagnoseTab() {
                       </Badge>
                     )}
                   </div>
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    口径说明：置信度是模型对本次结论的自评把握度；Trust Index 是证据一致性客观评分（0.4×忠实度 + 0.35×引用覆盖 + 0.25×反幻觉，达标线 85%），二者独立衡量，可出现「置信度高但 Trust Index 低」（结论缺证据支撑）或反之，均需人工关注。
+                  </p>
                   <div>
                     <p className="mb-1 text-xs font-medium text-muted-foreground">根因分析</p>
                     <p className="leading-relaxed">{result.agent.conclusion.root_cause}</p>
@@ -400,6 +404,8 @@ function GovernanceTab() {
             </CardContent>
           </Card>
 
+          <QualityMetricsCard quality={g.quality} title="本次起草质量评估（Trust Index 口径）" />
+
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader className="pb-2">
@@ -415,6 +421,12 @@ function GovernanceTab() {
                       {d.approval_request_id && <Badge variant="outline">审批单 #{d.approval_request_id}</Badge>}
                     </div>
                     <p className="mt-1 truncate text-muted-foreground" title={d.alert_template ?? ''}>{d.alert_template}</p>
+                    {d.quality?.trust_index != null && (
+                      <p className="mt-1 text-muted-foreground">
+                        单条质量：Trust Index {(d.quality.trust_index * 100).toFixed(1)}%
+                        {d.quality.quality_ok === false && <span className="text-amber-700">（未达 85% 达标线）</span>}
+                      </p>
+                    )}
                   </div>
                 ))}
               </CardContent>
@@ -429,6 +441,11 @@ function GovernanceTab() {
                   <div key={i} className="rounded-md border p-2.5 text-xs">
                     <p className="truncate" title={d.alert_template ?? ''}>{d.alert_template}</p>
                     <p className="mt-1 text-amber-700">{d.reason}</p>
+                    {d.quality?.trust_index != null && (
+                      <p className="mt-1 text-muted-foreground">
+                        单条质量：Trust Index {(d.quality.trust_index * 100).toFixed(1)}%
+                      </p>
+                    )}
                   </div>
                 ))}
               </CardContent>
@@ -530,6 +547,8 @@ function OncallTab() {
               </div>
             </CardContent>
           </Card>
+
+          {r.quality && <QualityMetricsCard quality={r.quality} title="报告质量评估（Trust Index 口径）" />}
 
           <Card>
             <CardHeader className="pb-2">
@@ -645,6 +664,7 @@ function OncallTab() {
                                 {rep.owners_to_notify.map((o) => <Badge key={o} variant="secondary">{o}</Badge>)}
                               </div>
                             </div>
+                            {rep.quality && <QualityMetricsCard quality={rep.quality} title="报告质量评估" />}
                           </>
                         ) : (
                           <p className="text-muted-foreground">该报告缺少结构化详情（仅保留摘要统计）。</p>
