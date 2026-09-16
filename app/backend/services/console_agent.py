@@ -16,6 +16,7 @@
 - oncall：AI 失败生成确定性统计报告
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -172,10 +173,21 @@ async def _flush(db: AsyncSession) -> None:
     await db.commit()
 
 
-async def _llm_chat(db: AsyncSession, messages: List[ChatMessage], max_tokens: int = 1600):
-    """LLM Chat：模型/温度/接入方式由控制台配置中心驱动（llm_runtime）。"""
+async def _llm_chat(
+    db: AsyncSession,
+    messages: List[ChatMessage],
+    max_tokens: int = 1600,
+    temperature: Optional[float] = None,
+):
+    """LLM Chat：模型/温度/接入方式由控制台配置中心驱动（llm_runtime）。
+
+    temperature 显式传入时覆盖配置中心采样温度：诊断 Agent 固定零温采样，
+    保证同一事件重复深度诊断的输出与质量指标稳定（波动治理）。
+    """
     timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
-    return await llm_runtime.llm_chat(db, messages, max_tokens=max_tokens, timeout=timeout)
+    return await llm_runtime.llm_chat(
+        db, messages, max_tokens=max_tokens, timeout=timeout, temperature=temperature
+    )
 
 
 async def _save_session(
@@ -373,8 +385,12 @@ async def _run_react(
     system_prompt: str,
     task_prompt: str,
     tools: Dict[str, ToolHandler],
+    temperature: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """ReAct 多轮循环：模型输出动作 → 执行工具 → 回填观察，直至 finish 或超限。"""
+    """ReAct 多轮循环：模型输出动作 → 执行工具 → 回填观察，直至 finish 或超限。
+
+    temperature 透传给全部 LLM 调用（含超限强制收尾），诊断 Agent 传 0 保证确定性。
+    """
     trace: List[Dict[str, Any]] = []
     messages: List[ChatMessage] = [
         ChatMessage(role="system", content=system_prompt),
@@ -388,7 +404,7 @@ async def _run_react(
     while iterations < MAX_ITERATIONS:
         iterations += 1
         await _flush(db)
-        response = await _llm_chat(db, messages)
+        response = await _llm_chat(db, messages, temperature=temperature)
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is None:
@@ -451,7 +467,7 @@ async def _run_react(
         _append_observation(messages, tool_name, observation)
 
     # 超限强制收尾：独立收尾函数（最多重试 2 次），避免单次输出抖动导致整体失败
-    return await _conclude_react(db, messages, trace, iterations, started, usage_acc)
+    return await _conclude_react(db, messages, trace, iterations, started, usage_acc, temperature=temperature)
 
 
 async def _conclude_react(
@@ -461,6 +477,7 @@ async def _conclude_react(
     iterations: int,
     started: float,
     usage_acc: Dict[str, int],
+    temperature: Optional[float] = None,
 ) -> Dict[str, Any]:
     """超限强制收尾：要求模型基于已有观察立即输出 finish JSON（最多重试 2 次）。"""
     await _flush(db)
@@ -473,7 +490,7 @@ async def _conclude_react(
         )
     ]
     for _attempt in range(2):
-        response = await _llm_chat(db, final_messages)
+        response = await _llm_chat(db, final_messages, temperature=temperature)
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is not None and payload.get("finish"):
@@ -677,38 +694,10 @@ def _build_diagnose_tools(db: AsyncSession, event: Events) -> Dict[str, ToolHand
         rag_cases = await _rag_kb_search(db, error_type, service, event.template or "")
         if rag_cases is not None:
             return {"source": "rag", "cases": rag_cases[:5]}
-        # 降级路径：PostgreSQL 限界召回（仅取最新 KB_SEARCH_SCAN_LIMIT 条，避免全量扫描）
-        result = await db.execute(
-            select(Kb_cases)
-            .where(Kb_cases.status != "archived")
-            .order_by(Kb_cases.id.desc())
-            .limit(KB_SEARCH_SCAN_LIMIT)
-        )
-        scored = []
-        for case in result.scalars().all():
-            if error_type and case.error_type != error_type:
-                continue
-            if service and case.service_name != service:
-                continue
-            score = score_case(case, event)
-            if score <= 0:
-                continue
-            scored.append((score, case))
-        scored.sort(key=lambda item: item[0], reverse=True)
+        # 降级路径：PostgreSQL 限界召回（确定性排序，与固定评估上下文共用同一实现）
         return {
             "source": "postgres_fallback",
-            "cases": [
-                {
-                    "case_id": case.case_id,
-                    "error_type": case.error_type,
-                    "service_name": case.service_name,
-                    "alert_template": case.alert_template,
-                    "root_cause": case.root_cause,
-                    "solution": case.solution,
-                    "score": round(min(0.99, score / 6.0), 4),
-                }
-                for score, case in scored[:5]
-            ]
+            "cases": await _local_kb_candidates(db, event, error_type, service),
         }
 
     return {
@@ -759,6 +748,179 @@ def _extract_rag_cases_from_trace(trace: List[Dict[str, Any]]) -> List[Dict[str,
     return cases
 
 
+# ------------------ 诊断确定性（波动治理）：固定评估上下文 / 指纹 / 稳定排序 ------------------
+
+DIAGNOSE_TOP_K = 5  # 本地确定性召回候选上限（与 RAG kb-search top_k 对齐）
+
+
+def _parse_diagnose_temperature(raw: Optional[str]) -> float:
+    """解析诊断采样温度：默认/空/非法回退 0（确定性优先），合法值截断到 [0, 2]。"""
+    try:
+        value = float(str(raw or "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+    if value != value:  # NaN 防御
+        return 0.0
+    return min(max(value, 0.0), 2.0)
+
+
+async def _resolve_diagnose_temperature(db: AsyncSession) -> float:
+    """读取配置中心 diagnose_temperature（默认 0）：诊断 Agent 全链路固定采样温度。"""
+    raw = await get_config(db, "diagnose_temperature", "0")
+    return _parse_diagnose_temperature(raw)
+
+
+def _rank_local_cases(
+    cases: List[Kb_cases],
+    event: Events,
+    error_type: str,
+    service_name: str,
+) -> List[Dict[str, Any]]:
+    """本地候选确定性召回与排序（search_kb 降级路径与固定评估上下文共用）。
+
+    过滤条件固定（非 archived + error_type/service_name 精确匹配 + score>0），
+    排序键 (score desc, case_id asc) 保证同分候选顺序跨次运行稳定。
+    """
+    scored: List[Tuple[float, Kb_cases]] = []
+    for case in cases:
+        if case.status == "archived":
+            continue
+        if error_type and case.error_type != error_type:
+            continue
+        if service_name and case.service_name != service_name:
+            continue
+        score = score_case(case, event)
+        if score <= 0:
+            continue
+        scored.append((score, case))
+    scored.sort(key=lambda item: (-item[0], str(item[1].case_id or "")))
+    return [
+        {
+            "case_id": case.case_id,
+            "error_type": case.error_type,
+            "service_name": case.service_name,
+            "alert_template": case.alert_template,
+            "root_cause": case.root_cause,
+            "solution": case.solution,
+            "score": round(min(0.99, score / 6.0), 4),
+        }
+        for score, case in scored[:DIAGNOSE_TOP_K]
+    ]
+
+
+async def _local_kb_candidates(
+    db: AsyncSession,
+    event: Events,
+    error_type: str,
+    service_name: str,
+) -> List[Dict[str, Any]]:
+    """PostgreSQL 限界召回（确定性）：固定评估上下文与 search_kb 降级共用同一实现。"""
+    result = await db.execute(
+        select(Kb_cases)
+        .where(Kb_cases.status != "archived")
+        .order_by(Kb_cases.id.desc())
+        .limit(KB_SEARCH_SCAN_LIMIT)
+    )
+    return _rank_local_cases(list(result.scalars().all()), event, error_type, service_name)
+
+
+def _build_eval_context(
+    local_candidates: List[Dict[str, Any]],
+    rag_cases: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """构建固定质量评估上下文：本地确定性候选 ∪ 本次 RAG 召回，按 case_id 去重后稳定排序。
+
+    评估基准不再依赖"该次运行是否恰好调用 search_kb"：未调用 KB 工具时
+    context_coverage 仍以固定本地候选为分母，保证同一事件重复诊断指标可比。
+    """
+    merged: Dict[str, Dict[str, Any]] = {}
+    for case in list(local_candidates) + list(rag_cases or []):
+        if not isinstance(case, dict):
+            continue
+        key = str(case.get("case_id") or "")
+        if not key or key in merged:
+            continue
+        merged[key] = case
+    return [merged[key] for key in sorted(merged)]
+
+
+def _context_fingerprint(cases: List[Dict[str, Any]]) -> str:
+    """评估上下文指纹：case_id + 主要内容字段的顺序无关 SHA256（前 16 位）。"""
+    material = "|".join(
+        sorted(
+            str(case.get("case_id") or "")
+            + ":"
+            + str(case.get("root_cause") or "")
+            + ":"
+            + str(case.get("solution") or "")
+            for case in cases or []
+            if isinstance(case, dict)
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+def _input_fingerprint(event: Events) -> str:
+    """诊断输入指纹：事件关键字段 SHA256（前 16 位），比对重复诊断的输入是否一致。"""
+    material = "|".join(
+        str(field or "")
+        for field in (
+            event.event_id,
+            event.template,
+            event.error_type,
+            event.service_name,
+            event.cluster,
+            event.severity,
+            event.raw_log,
+        )
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
+
+async def _build_diagnose_snapshot(
+    db: AsyncSession,
+    event: Events,
+    model_name: str,
+    temperature: float,
+    local_candidates: List[Dict[str, Any]],
+    eval_context: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """诊断上下文快照（波动治理）：事件输入、知识候选、激活规则版本与模型参数落库。
+
+    重复诊断时逐块比对 snapshot 即可定位波动来源：输入变化（event）/ 知识候选变化
+    （kb_candidates）/ 规则或模型参数变化（rule_version、model_params）。
+    敏感原文（raw_log 等）不入快照，仅记录 SHA256 指纹；候选只存 case_id 序列，控制体量。
+    """
+    rule_result = await db.execute(
+        select(Rule_versions)
+        .where(Rule_versions.status == "active")
+        .order_by(Rule_versions.version.desc())
+        .limit(1)
+    )
+    active_rule = rule_result.scalar_one_or_none()
+    try:
+        llm_timeout = int(await get_config(db, "llm_timeout_seconds", "45") or 45)
+    except (TypeError, ValueError):
+        llm_timeout = 45
+    return {
+        "event": {
+            "event_id": event.event_id,
+            "template": event.template,
+            "error_type": event.error_type,
+            "service_name": event.service_name,
+            "cluster": event.cluster,
+            "severity": event.severity,
+            "raw_log_sha": hashlib.sha256(str(event.raw_log or "").encode("utf-8")).hexdigest()[:16],
+        },
+        "kb_candidates": {
+            "local_ids": [str(c.get("case_id") or "") for c in local_candidates],
+            "merged_ids": [str(c.get("case_id") or "") for c in eval_context],
+        },
+        "rule_version": active_rule.version if active_rule is not None else None,
+        "model_params": {"model": model_name, "temperature": temperature, "timeout_seconds": llm_timeout},
+    }
+
+
 async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int) -> Dict[str, Any]:
     """诊断 Agent：多轮工具调用推理给出根因结论，失败自动降级为单轮诊断。"""
     actor = user.email or user.id
@@ -769,6 +931,8 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
 
     tools = _build_diagnose_tools(db, event)
     model_name = await llm_runtime.get_llm_model_name(db)
+    # 波动治理：诊断 Agent 固定采样温度（diagnose_temperature，默认 0），重复诊断输出稳定
+    diagnose_temperature = await _resolve_diagnose_temperature(db)
     task_prompt = (
         f"请诊断告警：event_id={event.event_id}（数据库主键 {event.id}）。\n"
         "建议流程：get_alert_detail →（按需）query_cmdb 确认主机所属系统/服务/负责人与日志路径 → "
@@ -779,7 +943,9 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
     loop_result: Optional[Dict[str, Any]] = None
     loop_error: Optional[str] = None
     try:
-        loop_result = await _run_react(db, DIAGNOSE_AGENT_SYSTEM_PROMPT, task_prompt, tools)
+        loop_result = await _run_react(
+            db, DIAGNOSE_AGENT_SYSTEM_PROMPT, task_prompt, tools, temperature=diagnose_temperature
+        )
         conclusion = _validate_diagnose_result(loop_result["result"], loop_result["trace"])
         if conclusion is None:
             loop_error = "invalid_agent_conclusion"
@@ -816,6 +982,26 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 summary="重跑诊断前保留的旧结论",
             )
         rag_cases = _extract_rag_cases_from_trace(loop_result["trace"])
+        # 固定评估上下文（波动治理）：评估基准与"本次是否恰好调用 search_kb"解耦，
+        # 本地确定性候选恒在分母中，同一事件重复诊断的质量指标才可比
+        local_candidates = await _local_kb_candidates(
+            db, event, event.error_type or "", event.service_name or ""
+        )
+        eval_context = _build_eval_context(local_candidates, rag_cases)
+        snapshot = await _build_diagnose_snapshot(
+            db, event, model_name, diagnose_temperature, local_candidates, eval_context
+        )
+        stability = {
+            "temperature": diagnose_temperature,
+            "input_fingerprint": _input_fingerprint(event),
+            "context_fingerprint": _context_fingerprint(eval_context),
+            "eval_context": {
+                "local_count": len(local_candidates),
+                "rag_count": len(rag_cases),
+                "merged_count": len(eval_context),
+            },
+            "snapshot": snapshot,
+        }
         quality = evaluate_diagnosis_quality(
             {
                 "template": event.template or "",
@@ -823,12 +1009,14 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "service_name": event.service_name or "",
             },
             f"{conclusion['root_cause']}\n{conclusion['solution']}",
-            rag_cases,
+            eval_context,
         )
         event.ai_root_cause = conclusion["root_cause"]
         event.ai_solution = conclusion["solution"]
         event.ai_command = conclusion["command"] or None
-        event.ai_output_json = json.dumps({**conclusion, "agent": True, "quality": quality}, ensure_ascii=False)
+        event.ai_output_json = json.dumps(
+            {**conclusion, "agent": True, "quality": quality, "stability": stability}, ensure_ascii=False
+        )
         event.confidence = conclusion["confidence"]
         event.status = "diagnosed"
         event.degraded_reason = None if conclusion["confidence"] >= threshold else f"low_confidence(<{threshold})"
@@ -845,6 +1033,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "threshold": threshold,
                 "usage": usage_summary,
                 "quality": quality,
+                "stability": stability,
                 "rag": {"case_count": len(rag_cases), "kb_search_used": bool(rag_cases)},
             },
             trace=loop_result["trace"],
@@ -868,6 +1057,9 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "low_confidence": conclusion["confidence"] < threshold,
                 "trust_index": quality["trust_index"],
                 "quality_ok": quality["quality_ok"],
+                "temperature": diagnose_temperature,
+                "context_fingerprint": stability["context_fingerprint"],
+                "rule_version": snapshot["rule_version"],
             },
         )
         return {
@@ -881,6 +1073,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "duration_ms": round(elapsed, 2),
                 "usage": usage_summary,
                 "quality": quality,
+                "stability": stability,
                 "rag": {"case_count": len(rag_cases), "kb_search_used": bool(rag_cases)},
                 "tool_trace": loop_result["trace"],
                 "conclusion": {

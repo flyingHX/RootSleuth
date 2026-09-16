@@ -240,6 +240,13 @@ function DiagnoseTab() {
                 {result.agent.rag?.kb_search_used && (
                   <Badge variant="outline">知识库召回 {result.agent.rag.case_count ?? 0} 条案例</Badge>
                 )}
+                {result.agent.stability && (
+                  <Badge variant="outline" className="font-mono text-[10px]">
+                    T={result.agent.stability.temperature ?? 0} · 评估上下文{" "}
+                    {result.agent.stability.eval_context?.merged_count ?? 0} 条 ·{" "}
+                    {(result.agent.stability.context_fingerprint ?? "").slice(0, 8)}
+                  </Badge>
+                )}
               </>
             )}
             <span className="text-muted-foreground">{result.message}</span>

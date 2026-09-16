@@ -399,6 +399,7 @@ const LABELS: Record<string, string> = {
   llm_api_key: 'LLM API Key',
   llm_model: 'Chat 模型',
   llm_temperature: '采样温度',
+  diagnose_temperature: '诊断采样温度',
   llm_timeout_seconds: '超时时间（秒）',
   embedding_base_url: 'Embedding Base URL',
   embedding_api_key: 'Embedding API Key',
@@ -415,7 +416,7 @@ const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: b
   {
     title: 'LLM 模型接入',
     hint: '诊断与三类 Agent（自研 ReAct）共用的 Chat 模型；切换为自建接口需填写 Base URL 与 API Key，保存后立即生效，无需重启。',
-    keys: ['llm_provider', 'llm_base_url', 'llm_api_key', 'llm_model', 'llm_temperature', 'llm_timeout_seconds'],
+    keys: ['llm_provider', 'llm_base_url', 'llm_api_key', 'llm_model', 'llm_temperature', 'diagnose_temperature', 'llm_timeout_seconds'],
     testable: true,
   },
   {

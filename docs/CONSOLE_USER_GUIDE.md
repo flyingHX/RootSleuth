@@ -116,6 +116,7 @@
 | approval_mode | 审批模式 OFF / SINGLE_REVIEW / MULTI_LEVEL |
 | confidence_threshold | 诊断置信度阈值（0~1） |
 | rerank_weight_json | 重排权重（cosine/topology/time_decay/feedback） |
+| diagnose_temperature | 诊断 Agent 独立采样温度（默认 0：同一事件重复深度诊断输出稳定；治理/值班 Agent 仍使用 llm_temperature=0.2） |
 | llm_timeout_seconds | LLM 诊断超时（10~300 秒） |
 | feature_flags_json | 功能开关（auto_diagnose/dedup_scan） |
 | default_role | 未绑定用户默认角色 |

@@ -198,7 +198,14 @@ class BusinessReranker(BaseDocumentCompressor):
             md["_f7_hitrate"] = round(f7, 4)
             md["_l2_score"] = round(score, 4)
 
-        ranked = sorted(documents, key=lambda d: d.metadata.get("_l2_score", 0.0), reverse=True)
+        # 稳定排序（波动治理）：同分候选按 case_id 升序 tie-break，跨次运行顺序一致
+        ranked = sorted(
+            documents,
+            key=lambda d: (
+                -float(d.metadata.get("_l2_score", 0.0) or 0.0),
+                str(d.metadata.get("case_id", "")),
+            ),
+        )
         return ranked[: self.top_k] if self.top_k and self.top_k > 0 else ranked
 
     @staticmethod

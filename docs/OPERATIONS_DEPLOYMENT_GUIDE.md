@@ -92,6 +92,8 @@ python scripts/fix_sequences.py
 
 认证相关密钥由 Atoms 平台注入（OIDC/JWKS），无需手工配置；AI 能力走内置 AIHub，无需自备 API Key。
 
+> **诊断确定性配置（波动治理）**：诊断 Agent 采样温度不在环境变量中管理，而是走控制台配置中心 `console_configs` 的 `diagnose_temperature` 键（默认 `0`）。生产环境保持默认 0 以保证同一事件重复深度诊断输出稳定（模型、检索与工具轨迹可复现）；如需多路径探索再调高。修改即时生效并写 `config_update` 审计，详见《深度诊断 Agent 现状设计说明书》§8。
+
 ### 6.1 RAG 流水线环境变量（/workspace/aiops-rag-system）
 
 RAG 服务为独立进程（经 `src/config.py` 读取环境变量），完整模板见 `aiops-rag-system/.env.example`。与服务间鉴权、多租户隔离相关的核心项（P0）：

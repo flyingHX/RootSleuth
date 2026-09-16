@@ -287,6 +287,8 @@ event.degraded_reason = None if confidence >= threshold else f"low_confidence(<{
 
 与知识治理/值班 Agent 共用 `llm_runtime`（详见《知识治理 Agent 现状设计说明书》§9）：`llm_provider`（atoms_hub 默认 / openai_compatible）、`llm_base_url`、`llm_api_key`（Fernet 加密）、`llm_model`（默认 `deepseek-v4-flash`）、`llm_temperature`（默认 0.2）、`llm_timeout_seconds`（默认 45，范围 10~300）。全部参数每次请求实时读库，配置变更立即生效。
 
+**诊断独立温度覆盖（波动治理）**：诊断 Agent 额外引入独立配置键 `diagnose_temperature`（默认 `0`），ReAct 推理、格式纠错与超限强制收尾的全部 LLM 调用统一使用该温度（`_run_react`/`_conclude_react` 全链路透传），与治理/值班 Agent 使用的 `llm_temperature`（0.2）相互独立。默认 0 保证同一事件重复深度诊断输出稳定；如需更强的多路径探索可调高（合法范围 clamp 到 [0, 2]，空/非法值回退 0）。
+
 ---
 
 ## 9. 降级策略矩阵
@@ -422,7 +424,8 @@ API 封装：`consoleApi.agentDiagnose(eventId)` → `POST /api/v1/console/agent
 |---------------------------|------|---------------------|
 | `llm_model` | `deepseek-v4-flash` | ReAct 推理与单轮诊断共用 |
 | `llm_timeout_seconds` | `45` | 每轮/每次调用超时 |
-| `llm_temperature` | `0.2` | 采样温度 |
+| `llm_temperature` | `0.2` | 治理/值班 Agent 采样温度（诊断 Agent 不使用） |
+| `diagnose_temperature` | `0` | 诊断 Agent 独立采样温度：全链路固定，默认 0 保证重复诊断确定性 |
 | `confidence_threshold` | `0.75` | 低置信度判定阈值 |
 | `embedding_base_url` / `embedding_api_key` / `embedding_model` | 空（未启用） | 单轮诊断 Embedding 加分开关 |
 | `llm_provider` / `llm_base_url` / `llm_api_key` | `atoms_hub` | 接入方式 |

@@ -508,6 +508,13 @@ export interface AgentDiagnoseResult {
     quality?: QualityMetrics | null;
     /** 本次会话 RAG 知识库召回统计 */
     rag?: { case_count?: number; kb_search_used?: boolean } | null;
+    /** 确定性信息（波动治理）：采样温度、输入/上下文指纹与固定评估上下文构成 */
+    stability?: {
+      temperature?: number;
+      input_fingerprint?: string;
+      context_fingerprint?: string;
+      eval_context?: { local_count?: number; rag_count?: number; merged_count?: number };
+    } | null;
     /** 本次会话 Token 用量汇总 */
     usage?: Record<string, unknown> | null;
   } | null;

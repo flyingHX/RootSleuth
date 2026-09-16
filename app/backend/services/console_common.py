@@ -49,6 +49,7 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "llm_api_key": "",
     "llm_model": "deepseek-v4-flash",
     "llm_temperature": "0.2",
+    "diagnose_temperature": "0",
     "embedding_base_url": "",
     "embedding_api_key": "",
     "embedding_model": "",
@@ -76,6 +77,7 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "llm_api_key": "LLM API Key（加密存储、脱敏展示；留空清除）",
     "llm_model": "LLM Chat 模型名称（诊断与三类 Agent 共用，如 deepseek-v4-flash）",
     "llm_temperature": "LLM 采样温度（0~2，默认 0.2）",
+    "diagnose_temperature": "深度诊断 Agent 采样温度（0~2，默认 0：固定零温保证同一事件重复诊断输出稳定；非法值回退 0）",
     "embedding_base_url": "Embedding Base URL（缺省回退 llm_base_url）",
     "embedding_api_key": "Embedding API Key（加密存储、脱敏展示；缺省回退 llm_api_key）",
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
@@ -320,13 +322,13 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
         if not value.strip() or "****" in value:
             return False, "llm_model 必须是有效的模型名称"
         return True, "ok"
-    if key == "llm_temperature":
+    if key in ("llm_temperature", "diagnose_temperature"):
         try:
             num = float(value)
         except ValueError:
-            return False, "llm_temperature 必须是数字"
+            return False, f"{key} 必须是数字"
         if not (0 <= num <= 2):
-            return False, "llm_temperature 必须在 0~2 之间"
+            return False, f"{key} 必须在 0~2 之间"
         return True, "ok"
     if key == "embedding_model":
         if "****" in value:

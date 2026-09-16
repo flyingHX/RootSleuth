@@ -110,7 +110,14 @@ class BGEReranker(BaseDocumentCompressor):
                 + self.l3_fusion_weight * s,
                 4,
             )
-        ranked = sorted(scored, key=lambda p: p[0].metadata.get("_fused_score", 0.0), reverse=True)
+        # 稳定排序（波动治理）：同分候选按 case_id 升序 tie-break，跨次运行顺序一致
+        ranked = sorted(
+            scored,
+            key=lambda p: (
+                -float(p[0].metadata.get("_fused_score", 0.0) or 0.0),
+                str(p[0].metadata.get("case_id", "")),
+            ),
+        )
         ranked_docs = [d for d, _ in ranked]
         return ranked_docs[: self.top_k] if self.top_k and self.top_k > 0 else ranked_docs
 

@@ -183,7 +183,13 @@ class RerankPipeline:
         seen_ids = {str(d.metadata.get("case_id", "")) for d in l3_docs}
         union = l3_docs + [d for d in l4_input if str(d.metadata.get("case_id", "")) not in seen_ids]
         fuse_final_scores(union)
-        union.sort(key=lambda d: d.metadata.get("_final_score", 0.0), reverse=True)
+        # 稳定排序（波动治理）：同分候选按 case_id 升序 tie-break，跨次运行 Top-K 一致
+        union.sort(
+            key=lambda d: (
+                -float(d.metadata.get("_final_score", 0.0) or 0.0),
+                str(d.metadata.get("case_id", "")),
+            )
+        )
         final = union[: self.final_k]
         stats.final_out = len(final)
         return RerankResult([document_to_case_dict(d) for d in final], stats)
