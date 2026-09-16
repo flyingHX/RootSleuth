@@ -363,6 +363,10 @@ def _template_similarity(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+# 去重合并展示阈值：两条知识模板相似度 ≥ 80% 才展示「是否合并」建议
+KB_DEDUP_SIMILARITY_THRESHOLD = 0.8
+
+
 async def _create_approval_request(
     db: AsyncSession,
     user: UserResponse,
@@ -1116,7 +1120,12 @@ async def run_lifecycle_patrol(db: AsyncSession, user: UserResponse, dry_run: bo
 
 
 async def scan_duplicates(db: AsyncSession) -> List[Dict[str, Any]]:
-    """扫描相似活跃案例：同 error_type + service 且模板相似或同集群。"""
+    """扫描相似活跃案例：同 error_type + service 且模板相似度 ≥80% 才纳入合并候选。
+
+    展示口径：仅当两条知识模板相似度 ≥ KB_DEDUP_SIMILARITY_THRESHOLD（默认 0.8）时
+    才作为可合并对展示；同集群但相似度不达标的案例不再并入，避免误导性合并建议。
+    返回组内两两相似度（similarities）与组内最低相似度（min_pair_similarity）。
+    """
     result = await db.execute(select(Kb_cases).where(Kb_cases.status == "active"))
     cases = list(result.scalars().all())
     groups: List[Dict[str, Any]] = []
@@ -1131,12 +1140,24 @@ async def scan_duplicates(db: AsyncSession) -> List[Dict[str, Any]]:
             same_sig = a.error_type == b.error_type and a.service_name == b.service_name
             if not same_sig:
                 continue
-            similar = _template_similarity(a.alert_template or "", b.alert_template or "") >= 0.5
-            same_cluster = a.cluster and a.cluster == b.cluster
-            if similar or same_cluster:
+            similar = (
+                _template_similarity(a.alert_template or "", b.alert_template or "")
+                >= KB_DEDUP_SIMILARITY_THRESHOLD
+            )
+            if similar:
                 group.append(b)
         if len(group) >= 2:
             used.update(c.case_id for c in group)
+            similarities: Dict[str, Dict[str, float]] = {}
+            pair_scores: List[float] = []
+            for x in range(len(group)):
+                for y in range(x + 1, len(group)):
+                    score = round(
+                        _template_similarity(group[x].alert_template or "", group[y].alert_template or ""), 4
+                    )
+                    similarities.setdefault(group[x].case_id, {})[group[y].case_id] = score
+                    similarities.setdefault(group[y].case_id, {})[group[x].case_id] = score
+                    pair_scores.append(score)
             groups.append(
                 {
                     "error_type": a.error_type,
@@ -1144,6 +1165,8 @@ async def scan_duplicates(db: AsyncSession) -> List[Dict[str, Any]]:
                     "case_ids": [c.case_id for c in group],
                     "cases": [ser_case(c) for c in group],
                     "suggested_master": max(group, key=lambda c: c.feedback_score or 0).case_id,
+                    "similarities": similarities,
+                    "min_pair_similarity": min(pair_scores) if pair_scores else 0.0,
                 }
             )
     return groups

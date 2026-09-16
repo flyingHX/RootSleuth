@@ -648,6 +648,12 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
 
 // ------------------ 去重合并 ------------------
 
+// 主案例与候选案例的模板相似度（0-1 → 百分数；无数据返回 null）
+function simPct(group: MergeGroup, master: string, caseId: string): number | null {
+  const v = group.similarities?.[master]?.[caseId];
+  return typeof v === 'number' ? Math.round(v * 100) : null;
+}
+
 function MergeGroupCard({
   group,
   canMerge,
@@ -676,6 +682,8 @@ function MergeGroupCard({
           <span className="font-mono">{group.error_type}</span>
           <span className="font-normal text-muted-foreground">
             {group.service_name} · {group.case_ids.length} 个相似案例
+            {typeof group.min_pair_similarity === 'number' &&
+              ` · 组内最低相似度 ${Math.round(group.min_pair_similarity * 100)}%`}
           </span>
           {canMerge && (
             <Button
@@ -707,6 +715,11 @@ function MergeGroupCard({
                   <span className="font-mono font-medium">{c.case_id}</span>
                   {c.case_id === group.suggested_master && <Badge variant="secondary">建议主案例（反馈分最高）</Badge>}
                   <span className="text-muted-foreground">反馈分 {c.feedback_score ?? 0} · v{c.version}</span>
+                  {c.case_id !== effectiveMaster && simPct(group, effectiveMaster, c.case_id) !== null && (
+                    <Badge variant="outline" className="font-normal">
+                      与主案例相似度 {simPct(group, effectiveMaster, c.case_id)}%
+                    </Badge>
+                  )}
                 </p>
                 <p className="mt-1 line-clamp-2 text-muted-foreground">{c.root_cause || '（无根因）'}</p>
               </div>
@@ -799,7 +812,7 @@ function MergeTab() {
           {scanQuery.isFetching ? '扫描中…' : '扫描相似案例'}
         </Button>
         <span className="text-xs text-muted-foreground">
-          按同错误类型 + 同服务 + 模板相似（≥50%）或同集群聚类；合并后冗余案例归档，全部写入审计。
+          按同错误类型 + 同服务且模板相似度 ≥80% 聚类，仅展示相似度达标的合并建议；合并后冗余案例归档，全部写入审计。
         </span>
       </div>
 

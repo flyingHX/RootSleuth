@@ -285,9 +285,7 @@ flowchart TD
 ### 8.1 相似案例扫描 `scan_duplicates`
 
 - 范围：`status='active'` 的知识案例，两两比较；
-- 成组条件：`error_type` 与 `service_name` **完全相同**，且满足其一：
-  - 模板 token 集 Jaccard 相似度 **≥ 0.5**（`_template_similarity`）；
-  - `cluster` 非空且相同；
+- 成组条件：`error_type` 与 `service_name` **完全相同**，且模板 token 集 Jaccard 相似度 **≥ 0.8**（`_template_similarity`，阈值常量 `KB_DEDUP_SIMILARITY_THRESHOLD`；相似度不足 80% 不成组，`cluster` 相同不再作为兜底条件）；
 - `suggested_master`：组内 `feedback_score` 最高的案例；
 - 已成组的案例不重复入组（`used` 集合）。
 

@@ -460,6 +460,10 @@ export interface MergeGroup {
   case_ids: string[];
   cases: KbCase[];
   suggested_master: string;
+  /** 组内两两模板相似度（case_id → case_id → [0,1]），仅返回 ≥80% 达标组 */
+  similarities?: Record<string, Record<string, number>>;
+  /** 组内最低两两相似度（0-1），用于展示达标情况 */
+  min_pair_similarity?: number;
 }
 
 export interface MergeProposal {
