@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/images/rootsleuth-repo-banner-magnifier-ecg.png" alt="RootSleuth — 侦探放大镜洞察告警根因，心电图脉搏象征持续运行的知识闭环" width="920"/>
+</p>
+
 # RootSleuth — 智能告警 RAG 知识库系统（项目总览）
 
 面向 SRE 的智能告警诊断与知识运营平台，由两个独立部署的子系统组成：
