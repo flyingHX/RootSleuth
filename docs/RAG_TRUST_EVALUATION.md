@@ -116,4 +116,4 @@
 - 版本守卫与补偿：`app/backend/services/rag_sync.py`、`models/rag_sync_tasks.py`、`scripts/verify_rag_compensation_e2e.py`
 - RAG 层无鉴权证据：`aiops-rag-system/src/api/*.py`（无 Depends/鉴权依赖）、`milvus_client.py`（expr 无租户过滤）
 - 指标现状：`aiops-rag-system/src/utils/metrics.py`
-- 回归记录：`.atoms/PROGRESS.md`（pytest 78/0/0、E2E 37/37、迁移 head c9d5e2f7a8b1）
+- 回归记录：RAG 全量 pytest 132 passed / 0 failed、补偿 E2E 37/37（2026-09-15）

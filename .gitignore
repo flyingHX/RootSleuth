@@ -2,6 +2,7 @@
 .atoms/
 .mgx/
 .uploads/
+.wiki.md
 
 # ===== 密钥与环境变量（示例模板 .env.example 保留入库）=====
 .env

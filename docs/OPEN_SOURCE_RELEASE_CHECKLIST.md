@@ -18,7 +18,7 @@
 
 ## 二、发布前必做（需在具备 Git 写权限的环境执行）
 
-本沙箱中 Git 索引由平台托管（`/run/gitdata` 为只读文件系统），以下命令需推送到 GitHub 前在可写环境中执行：
+本沙箱中 Git 索引若由托管环境管理（只读文件系统），以下命令需推送到 GitHub 前在可写环境中执行：
 
 ```bash
 # 1. 解除已跟踪但不开源的文件（保留本地文件，仅移出索引）
@@ -68,14 +68,10 @@ gh release create v1.0.0 aiops-suite-1.0.0.tar.gz --notes "..."
 
 | 文档 | 审计结论 | 处理建议 |
 |------|----------|----------|
-| `.atoms/` 全部 md（ATOMS/PROGRESS/ARCHITECTURE/SKILLS/skills） | 平台协作上下文与内部技能文档 | **不入库**——未被 Git 跟踪且已被 `.gitignore` 排除，无需处理 |
 | `app/backend/skills_docs/`（4 篇） | Atoms 平台模板内置的能力文档（web-sdk/AIHub/对象存储/自定义 API、mgx-pycheck），对开源用户无意义且暴露平台内部工具链 | **不入库**——已加入 `.gitignore`；可写环境执行 `git rm -r --cached app/backend/skills_docs` |
-| `app/backend/README.md`、`app/frontend/README.md` | 平台模板 README，含 `mgx-pycheck`、`data-mgx-overview`、"Welcome to Atoms" 等平台指令内容 | 发布前**改写**为面向使用者的后端/前端说明（技术栈、目录、启动方式），移除平台工作流段落 |
-| 根 `README.md` | 目录关系表引用 `.atoms/`、`.mgx/config.yaml` 与「Atoms 平台托管」字样，而 `.atoms/`、`.mgx/` 实际不入库，链接语义悬空 | 发布前将目录表中两行改为「平台协作目录（不入库）」或直接删除该两行 |
-| `docs/OPEN_SOURCE_RELEASE_CHECKLIST.md` | 含沙箱内部细节（`/run/gitdata` 只读文件系统等） | 发布前将「本沙箱中 Git 索引由平台托管」一句改为通用表述（如「若 Git 索引只读/由托管环境管理」） |
 | `docs/DEMO_ACCOUNTS.md` | 演示邮箱与中间件默认凭证（minioadmin 等），均已在文中声明生产必改；无真实密钥 | 保留入库（见「四、分发与第三方说明」）；如希望零凭证文档可改为不入库 |
 | `docs/CONSOLE_FAQ.md`、`docs/CONSOLE_USER_GUIDE.md` | 提及预览环境演示账号（与 DEMO_ACCOUNTS 同源），无密码字段 | 保留 |
-| `.wiki.md`、`docs/OPERATIONS_*.md`、`CONTRIBUTING/SECURITY/CODE_OF_CONDUCT`、`aiops-rag-system/README.md` | 全文核查无真实凭证、无内网 IP（仅 0.0.0.0/127.0.0.1 示例地址） | 保留 |
+| `docs/OPERATIONS_*.md`、`CONTRIBUTING/SECURITY/CODE_OF_CONDUCT`、`aiops-rag-system/README.md` | 全文核查无真实凭证、无内网 IP（仅 0.0.0.0/127.0.0.1 示例地址） | 保留 |
 | `aiops-rag-system/.pytest_cache/README.md` | pytest 自动生成缓存 | 已被 `.gitignore` 排除，未跟踪 |
 
 ## 六、发布后维护
