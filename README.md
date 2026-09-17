@@ -22,7 +22,6 @@
 | `aiops-rag-system/` | RAG 流水线子系统 | Python 3.10 + FastAPI + LangChain；自带 `docker-compose.yml`（etcd/MinIO/Milvus/Kafka/Redis/ES）、pytest 测试（30 passed）、初始化与种子脚本 |
 | `app/` | 运营控制台子系统（Atoms 平台托管） | 平台预览服务、受保护入口（`backend/main.py` 等）与 `.mgx/config.yaml` 绑定此路径，不可迁移；一键启动 `bash app/start_app_v2.sh` |
 | `docs/` | 项目级文档（整个项目共用） | 控制台使用手册、FAQ、运维部署方案手册、运维 Runbook |
-| `.atoms/` | 平台团队协作上下文 | `ATOMS.md`（决策/约束）、`ARCHITECTURE.md`（架构）、`PROGRESS.md`（进度）+ 平台 Skills；由平台与团队共同维护 |
 | `uploads/` | 平台文件上传暂存区 | 用户上传的临时文件，平台管理 |
 | `.wiki.md` | 平台 Wiki 摘要 | 自动维护的项目概览/模块/目录树/**接口文档**（面向外部系统调用方） |
 | `.git` | Git 仓库指针 | 指向平台 gitdata，由平台管理 |
