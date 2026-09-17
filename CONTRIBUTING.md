@@ -1,6 +1,6 @@
 # 贡献指南（CONTRIBUTING）
 
-感谢关注 AIOps 智能告警 RAG 知识库系统！欢迎通过 Issue 反馈问题、通过 Pull Request 提交代码。请在参与前先阅读 [行为准则](CODE_OF_CONDUCT.md)。
+感谢关注 RootSleuth（智能告警 RAG 知识库系统）！欢迎通过 Issue 反馈问题、通过 Pull Request 提交代码。请在参与前先阅读 [行为准则](CODE_OF_CONDUCT.md)。
 
 ## 项目组成
 

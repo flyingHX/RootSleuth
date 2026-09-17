@@ -159,7 +159,7 @@ function LoginScreen() {
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <Activity className="h-6 w-6" />
         </div>
-        <h1 className="text-xl font-semibold tracking-tight">AIOps 运营控制台</h1>
+        <h1 className="text-xl font-semibold tracking-tight">RootSleuth 控制台</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           告警诊断、知识库治理与审批审计的一站式工作台。登录后按角色分配只读审计、值班运维、SRE、审批人与管理员权限。
         </p>
@@ -238,7 +238,7 @@ export default function ConsoleLayout() {
               <Activity className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-sm font-semibold leading-tight">AIOps 控制台</p>
+              <p className="text-sm font-semibold leading-tight">RootSleuth</p>
               <p className="text-xs text-muted-foreground">告警 · 知识库 · 审批</p>
             </div>
           </div>
@@ -264,7 +264,7 @@ export default function ConsoleLayout() {
                 </Button>
               </SheetTrigger>
               <SheetContent side="left" className="w-64 p-4">
-                <SheetTitle className="mb-3 text-left">AIOps 控制台</SheetTitle>
+                <SheetTitle className="mb-3 text-left">RootSleuth 控制台</SheetTitle>
                 <NavLinks onNavigate={() => setMobileOpen(false)} />
               </SheetContent>
             </Sheet>

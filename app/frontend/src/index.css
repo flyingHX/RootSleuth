@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    /* AIOps 控制台浅色主题：青灰中性色（hue 195，饱和 4~8%）+ teal 主色（hue 174） */
+    /* RootSleuth 控制台浅色主题：青灰中性色（hue 195，饱和 4~8%）+ teal 主色（hue 174） */
     --background: 195 25% 97%;
     --foreground: 200 25% 12%;
 

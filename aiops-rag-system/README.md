@@ -1,8 +1,8 @@
-# AIOps 智能告警 RAG 知识库系统
+# RootSleuth — 智能告警 RAG 知识库系统
 
 基于 **LangChain 架构** 的 AIOps 告警诊断系统：告警接入 → 日志标准化（Drain 模板）→ Kafka 解耦 → Redis 去重聚合 → Milvus 向量检索 + 业务重排 → LLM 生成根因分析 → 人工反馈闭环自进化。
 
-> 本目录是整个 AIOps 项目的 **RAG 告警诊断流水线** 子系统；运营控制台位于 `../app`（Atoms 平台托管）。项目总览与目录关系见仓库根目录 `README.md`，项目级文档见 `../docs/`（使用手册、FAQ、运维部署与 Runbook），对外接口文档见 `.wiki.md`「API Documentation」。
+> 本目录是 RootSleuth 的 **RAG 告警诊断流水线** 子系统；运营控制台位于 `../app`（Atoms 平台托管）。项目总览与目录关系见仓库根目录 `README.md`，项目级文档见 `../docs/`（使用手册、FAQ、运维部署与 Runbook），对外接口文档见 `.wiki.md`「API Documentation」。
 
 ## 系统架构
 

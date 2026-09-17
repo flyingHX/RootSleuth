@@ -58,7 +58,7 @@ SEVERITY_RANK = {"critical": 3, "warning": 2, "info": 1}
 WINDOW_DELTAS_HOURS = {"1h": 1, "24h": 24, "7d": 168}
 ONCALL_PRIORITIES = {"P0", "P1", "P2", "P3"}
 
-DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是 AIOps 诊断 Agent。你只能通过工具获取信息，必须多轮取证后再下结论。
+DIAGNOSE_AGENT_SYSTEM_PROMPT = """你是 RootSleuth 诊断 Agent。你只能通过工具获取信息，必须多轮取证后再下结论。
 
 可用工具：
 1. get_alert_detail - args: {}。返回告警详情：主机线索（extracted_ips / extracted_host_tokens）、服务、集群、模板、原始日志、拓扑，以及既有单轮诊断结论（若有）。

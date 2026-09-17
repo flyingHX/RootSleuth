@@ -1,6 +1,6 @@
 # Backend Development Guide
 
-> 项目定位：本目录是 AIOps 运营控制台后端（Atoms 平台托管）。项目总览与目录关系见仓库根目录 `README.md`，项目文档见 `docs/`，对外接口文档见 `.wiki.md`「API Documentation」。
+> 项目定位：本目录是 RootSleuth 运营控制台后端（Atoms 平台托管）。项目总览与目录关系见仓库根目录 `README.md`，项目文档见 `docs/`，对外接口文档见 `.wiki.md`「API Documentation」。
 
 Atoms Cloud is enabled, use it as the backend service (provides Auth, Database, File Storage, Edge Functions, AI Capabilities).
 

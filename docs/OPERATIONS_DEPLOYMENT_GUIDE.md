@@ -1,6 +1,6 @@
-# AIOps 运营控制台运维部署方案手册
+# RootSleuth 运营控制台运维部署方案手册
 
-> 适用范围：整个 AIOps 项目——运营控制台 `/workspace/app`（React + Vite 前端 + FastAPI 后端 + Atoms Cloud 托管 PostgreSQL）与 RAG 流水线 `/workspace/aiops-rag-system`（Python，含 Milvus/Kafka/Redis/ES docker-compose），两者独立部署。
+> 适用范围：整个 RootSleuth 项目——运营控制台 `/workspace/app`（React + Vite 前端 + FastAPI 后端 + Atoms Cloud 托管 PostgreSQL）与 RAG 流水线 `/workspace/aiops-rag-system`（Python，含 Milvus/Kafka/Redis/ES docker-compose），两者独立部署。
 > 项目级文档统一存放于 `/workspace/docs`（本手册所在目录）；目录关系见根目录 `README.md`。
 
 ## 1. 系统组成
@@ -530,7 +530,7 @@ docker compose down -v         # ⚠️ 连同 etcd_data/minio_data/milvus_data 
 ```ini
 # /etc/systemd/system/aiops-pipeline.service
 [Unit]
-Description=AIOps RAG Pipeline API
+Description=RootSleuth RAG Pipeline API
 After=docker.service network-online.target
 Requires=docker.service
 

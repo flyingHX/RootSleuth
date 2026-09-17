@@ -1,4 +1,4 @@
-"""AIOps 运营控制台业务 API：RBAC、Dashboard、告警流、AI 诊断、知识库、审批、规则、审计、配置。"""
+"""RootSleuth 运营控制台业务 API：RBAC、Dashboard、告警流、AI 诊断、知识库、审批、规则、审计、配置。"""
 import json
 import logging
 from datetime import datetime, timedelta, timezone

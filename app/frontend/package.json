@@ -1,5 +1,5 @@
 {
-  "name": "shadcnui",
+  "name": "rootsleuth-console",
   "type": "module",
   "scripts": {
     "dev": "vite",

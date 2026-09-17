@@ -1,6 +1,6 @@
 # 演示账号说明（Demo Accounts）
 
-> 适用范围：AIOps 控制台（`/workspace/app`）预览/演示环境。
+> 适用范围：RootSleuth 控制台（`/workspace/app`）预览/演示环境。
 > 最后更新：2026-09-12（与 `app/backend/routers/auth.py` · `DEMO_LOGIN_ACCOUNTS` 及种子数据逐一对齐）
 
 ## 1. 重要说明：无密码机制

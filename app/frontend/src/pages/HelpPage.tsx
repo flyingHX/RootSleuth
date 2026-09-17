@@ -4,7 +4,7 @@ import { BookOpenText, LifeBuoy } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 const USER_GUIDE = [
-  '# AIOps 运营控制台使用手册',
+  '# RootSleuth 运营控制台使用手册',
   '',
   '## 1. 登录与角色权限',
   '',

@@ -1,4 +1,4 @@
-# AIOps 运营控制台运维手册（Runbook）
+# RootSleuth 运营控制台运维手册（Runbook）
 
 > 面向值班与 SRE 的应急处置手册。部署细节见《OPERATIONS_DEPLOYMENT_GUIDE.md》。
 
