@@ -184,7 +184,7 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
   const diagnosis = result?.diagnosis
     ? result.diagnosis
     : detail.ai_output
-      ? { ...detail.ai_output, model: 'deepseek-v4-flash（历史）', low_confidence: false, threshold: 0.7 }
+      ? { ...detail.ai_output, low_confidence: false, threshold: 0.7 }
       : null;
   // 单次质量指标：优先取本次诊断响应，历史事件回退 ai_output_json 中持久化的 quality
   const quality = result?.quality ?? detail.ai_output?.quality ?? null;
@@ -214,7 +214,9 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
               Embedding 加分（权重 {result.rag.embedding.boost_weight ?? 0.5}）
             </Badge>
           )}
-          <Badge variant="secondary" className="font-mono">{diagnosis.model}</Badge>
+          {diagnosis.model && (
+            <Badge variant="secondary" className="font-mono">{diagnosis.model}</Badge>
+          )}
         </div>
       )}
       <QualityMetricsCard quality={quality} />
@@ -390,7 +392,7 @@ function DetailBody({ detail, result, onDiagnose, diagnosing }: {
       )}
 
       <div>
-        <p className="mb-1.5 text-sm font-semibold">AI 诊断结论（deepseek-v4-flash）</p>
+        <p className="mb-1.5 text-sm font-semibold">AI 诊断结论</p>
         <DiagnosisPanel detail={detail} result={result} />
       </div>
 
@@ -492,7 +494,7 @@ export default function EventsPage() {
       <div>
         <h1 className="text-lg font-semibold tracking-tight">告警工作台</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          告警流检索、AI 根因诊断（deepseek-v4-flash）与人工反馈闭环。
+          告警流检索、AI 根因诊断与人工反馈闭环。
         </p>
       </div>
 

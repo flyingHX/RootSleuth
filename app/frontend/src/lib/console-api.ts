@@ -143,7 +143,7 @@ export interface EventDetail extends EventItem {
   ai_root_cause: string | null;
   ai_solution: string | null;
   ai_command: string | null;
-  ai_output: { root_cause: string; solution: string; confidence: number; command: string; quality?: QualityMetrics | null } | null;
+  ai_output: { root_cause: string; solution: string; confidence: number; command: string; model?: string; quality?: QualityMetrics | null } | null;
 }
 
 export interface DiagnosisResult {
@@ -312,6 +312,23 @@ export interface KbHealthReport {
     oldest: { case_id: string; age_days: number | null } | null;
   };
   risk_cases: KbHealthRiskCase[];
+}
+
+/** 生命周期巡检（老化 / 负反馈归档淘汰）返回体：dry_run=true 仅返回候选预览 */
+export interface LifecyclePatrolResult {
+  dry_run: boolean;
+  expire_days: number;
+  candidates: { case_id: string; feedback_score: number | null; updated_at: string | null }[];
+  archived: string[];
+}
+
+/** 到期补偿任务重试返回体 */
+export interface SyncRetryResult {
+  executed: number;
+  succeeded: number;
+  dead_lettered: number;
+  pending_remaining: number;
+  dry_run: boolean;
 }
 
 export interface KbCaseDetail {
@@ -721,6 +738,18 @@ export const consoleApi = {
     ),
   rollbackCase: (caseId: string, version: number) =>
     invoke<KbCase>(`/api/v1/console/kb/cases/${encodeURIComponent(caseId)}/rollback`, 'POST', { version }),
+  /** 归档知识案例：业务库归档 + 审计 + RAG 检索侧索引删除（kb_admin 及以上） */
+  archiveCase: (caseId: string) =>
+    invoke<KbCase>(`/api/v1/console/kb/cases/${encodeURIComponent(caseId)}/archive`, 'POST', {}),
+  /** 生命周期巡检：dryRun=true 仅预览归档候选，false 执行批量归档（kb_admin 及以上） */
+  lifecyclePatrol: (dryRun: boolean) =>
+    invoke<LifecyclePatrolResult>('/api/v1/console/kb/lifecycle-patrol', 'POST', { dry_run: dryRun }),
+  /** 手动触发到期补偿任务重试（kb_admin 及以上） */
+  retryDueTasks: (limit = 20) =>
+    invoke<SyncRetryResult>(`/api/v1/console/rag-sync/retry-due?limit=${limit}`, 'POST', {}),
+  /** 批量重放死信任务：重置计数后重新排队（kb_admin 及以上） */
+  replayDeadTasks: () =>
+    invoke<{ requeued: number; task_ids: number[] }>('/api/v1/console/rag-sync/replay-dead', 'POST', {}),
   previewKbRelatedEvents: (template?: string, service?: string) => {
     const qs = new URLSearchParams();
     if (template?.trim()) qs.set('template', template.trim());

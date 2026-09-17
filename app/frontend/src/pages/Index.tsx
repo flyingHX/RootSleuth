@@ -12,7 +12,7 @@ const HEALTH_LABEL: Record<string, string> = {
   milvus: 'Milvus 向量检索',
   redis: 'Redis 去重聚合',
   elasticsearch: 'Elasticsearch 冷存储',
-  llm: 'LLM 诊断（deepseek-v4-flash）',
+  llm: 'LLM 诊断',
 };
 
 function MetricStrip({ metrics }: { metrics: NonNullable<ReturnType<typeof useDashboardQuery>['data']>['metrics'] }) {
@@ -54,7 +54,7 @@ function QualityStrip({ quality }: { quality: DashboardData['quality'] }) {
   const items = [
     {
       label: 'Trust Index',
-      value: quality.trust_index_avg !== null ? quality.trust_index_avg.toFixed(3) : '—',
+      value: quality.trust_index_avg !== null ? fmtPercent(quality.trust_index_avg) : '—',
       hint: `近 ${quality.sample_count} 次诊断样本`,
     },
     {

@@ -9,6 +9,8 @@ import {
   type AuditLog,
   type ConfigItem,
   type KbHealthReport,
+  type KbHealthRiskCase,
+  type LifecyclePatrolResult,
   type LlmTestResult,
 } from '@/lib/console-api';
 import { EmptyBlock, JsonPre, LoadingBlock, StateGate, fmtPercent, fmtTime } from '@/components/console/shared';
@@ -169,7 +171,7 @@ function QualityOverviewCard() {
         <CardTitle className="text-sm">诊断质量态势</CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatItem label="Trust Index" value={fmt(q?.trust_index_avg, (n) => n.toFixed(3))} />
+        <StatItem label="Trust Index" value={fmt(q?.trust_index_avg, fmtPercent)} />
         <StatItem label="质量达标率" value={fmt(q?.quality_ok_rate, fmtPercent)} />
         <StatItem label="检索成功率" value={fmt(q?.retrieval?.success_rate, fmtPercent)} />
         <StatItem label="生成成功率" value={fmt(q?.generation?.success_rate, fmtPercent)} />
@@ -179,10 +181,79 @@ function QualityOverviewCard() {
 }
 
 function KbHealthTab() {
+  const perms = usePermissions();
+  const queryClient = useQueryClient();
+  // 归档 / 巡检 / 死信重放 / 到期重试后端均要求 kb_admin 及以上，前端以等价的 can_publish 门控
+  const canOperate = !!perms?.can_publish;
+  const [patrolPreview, setPatrolPreview] = useState<LifecyclePatrolResult | null>(null);
+
   const query = useQuery({
     queryKey: ['kb-health'],
     queryFn: () => consoleApi.getKbHealth(),
     refetchInterval: 60_000,
+  });
+
+  const invalidateHealth = () => {
+    queryClient.invalidateQueries({ queryKey: ['kb-health'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+  };
+
+  const archiveMutation = useMutation({
+    mutationFn: (caseId: string) => consoleApi.archiveCase(caseId),
+    onSuccess: (_res, caseId) => {
+      toast.success(`案例 ${caseId} 已归档，检索侧索引已删除`);
+      invalidateHealth();
+    },
+    onError: (e) => toast.error(`归档失败：${errDetail(e)}`),
+  });
+
+  const retryMutation = useMutation({
+    mutationFn: () => consoleApi.retryDueTasks(20),
+    onSuccess: (res) => {
+      if (res.executed > 0) {
+        toast.success(`已执行 ${res.executed} 个到期任务：成功 ${res.succeeded}、转死信 ${res.dead_lettered}`);
+      } else {
+        toast('当前没有到期的补偿任务');
+      }
+      invalidateHealth();
+    },
+    onError: (e) => toast.error(`同步重试失败：${errDetail(e)}`),
+  });
+
+  const replayDeadMutation = useMutation({
+    mutationFn: async () => {
+      const dead = await consoleApi.replayDeadTasks();
+      const retry = await consoleApi.retryDueTasks(20);
+      return { requeued: dead.requeued, retry };
+    },
+    onSuccess: (res) => {
+      toast.success(
+        `已重放 ${res.requeued} 个死信任务并触发重试：成功 ${res.retry.succeeded}、剩余待重试 ${res.retry.pending_remaining}`,
+      );
+      invalidateHealth();
+    },
+    onError: (e) => toast.error(`死信重放失败：${errDetail(e)}`),
+  });
+
+  const patrolMutation = useMutation({
+    mutationFn: (dryRun: boolean) => consoleApi.lifecyclePatrol(dryRun),
+    onSuccess: (res, dryRun) => {
+      if (dryRun) {
+        setPatrolPreview(res);
+        if (res.candidates.length === 0) {
+          toast.success(`老化巡检完成：无满足归档条件的候选（老化阈值 ${res.expire_days} 天）`);
+        }
+      } else {
+        setPatrolPreview(null);
+        toast.success(
+          res.archived.length > 0
+            ? `老化巡检已归档 ${res.archived.length} 个案例：${res.archived.join('、')}`
+            : '老化巡检完成：无可归档案例',
+        );
+        invalidateHealth();
+      }
+    },
+    onError: (e) => toast.error(`老化巡检失败：${errDetail(e)}`),
   });
 
   if (query.isLoading) return <LoadingBlock rows={6} />;
@@ -193,11 +264,62 @@ function KbHealthTab() {
   const report: KbHealthReport = query.data;
   const { summary, sync, content_safety, aging } = report;
 
+  /** 逐案处置渲染：同步死信 → 重放；未确认 → 重试；统一提供归档出口；归档为生命周期终态 */
+  const renderCaseActions = (c: KbHealthRiskCase) => {
+    if (c.status === 'archived') {
+      return <span className="text-muted-foreground">终态，无需处理</span>;
+    }
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {c.sync_dead > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[10px]"
+            disabled={!canOperate || replayDeadMutation.isPending}
+            onClick={() => replayDeadMutation.mutate()}
+          >
+            重放死信
+          </Button>
+        )}
+        {!c.sync_verified && c.sync_dead === 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-6 px-2 text-[10px]"
+            disabled={!canOperate || retryMutation.isPending}
+            onClick={() => retryMutation.mutate()}
+          >
+            重试同步
+          </Button>
+        )}
+        {(c.content_risk === 'high' || c.content_risk === 'high_overridden') && (
+          <span className="text-[10px] leading-snug text-muted-foreground">到「知识库」编辑重审，或归档下线</span>
+        )}
+        <Button
+          size="sm"
+          variant="destructive"
+          className="h-6 px-2 text-[10px]"
+          disabled={!canOperate || archiveMutation.isPending}
+          onClick={() => archiveMutation.mutate(c.case_id)}
+        >
+          归档
+        </Button>
+        {!canOperate && <span className="text-[10px] text-muted-foreground">需 kb_admin</span>}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
         红黄绿健康度口径：绿=verify 确认且无风险；黄=同步未确认 / 超老化阈值 / 负反馈 / PII 标记放行；
         红=同步死信 / 高风险内容（含误报放行留痕）/ 反馈分 ≤ -2 / 超无条件老化阈值。
+      </p>
+      <p className="text-xs text-muted-foreground">
+        风险闭环路径：同步死信 → 「重放死信任务」重置并立即重试；同步未确认 → 「重试同步」或等待自动补偿；
+        负反馈 ≤ -2 或超老化阈值 → 单案「归档」或「老化巡检」先预览再批量归档（归档同步删除检索索引并写审计）；
+        高风险内容 → 到「知识库」编辑重新过内容扫描或归档下线。处置操作需知识库管理员（kb_admin）及以上角色。
       </p>
       <QualityOverviewCard />
       <div className="grid gap-4 lg:grid-cols-4">
@@ -290,16 +412,73 @@ function KbHealthTab() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">风险案例清单（红 / 黄）</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
+            风险案例清单（红 / 黄）
+            <span className="ml-auto flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                disabled={!canOperate || retryMutation.isPending}
+                onClick={() => retryMutation.mutate()}
+              >
+                重试同步
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                disabled={!canOperate || replayDeadMutation.isPending}
+                onClick={() => replayDeadMutation.mutate()}
+              >
+                重放死信任务
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                disabled={!canOperate || patrolMutation.isPending}
+                onClick={() => patrolMutation.mutate(true)}
+              >
+                老化巡检（预览）
+              </Button>
+            </span>
+          </CardTitle>
         </CardHeader>
         <CardContent>
+          {patrolPreview && (
+            <div className="mb-3 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+              <p className="font-medium text-amber-700 dark:text-amber-400">
+                老化巡检预览：候选 {patrolPreview.candidates.length} 个（老化阈值 {patrolPreview.expire_days} 天）
+                {patrolPreview.candidates.length === 0 && '，无可归档案例'}
+              </p>
+              {patrolPreview.candidates.length > 0 && (
+                <p className="break-all text-muted-foreground">
+                  {patrolPreview.candidates.map((c) => `${c.case_id}（反馈 ${c.feedback_score ?? '—'}）`).join('、')}
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  disabled={!canOperate || patrolMutation.isPending || patrolPreview.candidates.length === 0}
+                  onClick={() => patrolMutation.mutate(false)}
+                >
+                  {patrolMutation.isPending ? '归档中…' : `确认归档 ${patrolPreview.candidates.length} 个候选`}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setPatrolPreview(null)}>
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
           {report.risk_cases.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
               全部知识案例健康，无红 / 黄分级案例。
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[880px] text-left text-xs">
+              <table className="w-full min-w-[1000px] text-left text-xs">
                 <thead>
                   <tr className="border-b text-muted-foreground">
                     <th className="py-2 pr-3 font-medium">健康度</th>
@@ -310,7 +489,8 @@ function KbHealthTab() {
                     <th className="py-2 pr-3 font-medium">年龄</th>
                     <th className="py-2 pr-3 font-medium">同步</th>
                     <th className="py-2 pr-3 font-medium">内容风险</th>
-                    <th className="py-2 font-medium">命中原因</th>
+                    <th className="py-2 pr-3 font-medium">命中原因</th>
+                    <th className="py-2 font-medium">处置</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -357,6 +537,7 @@ function KbHealthTab() {
                           ))}
                         </ul>
                       </td>
+                      <td className="py-2.5">{renderCaseActions(c)}</td>
                     </tr>
                   ))}
                 </tbody>
