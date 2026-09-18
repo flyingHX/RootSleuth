@@ -932,6 +932,9 @@ const zhCN = {
         embedding_base_url: 'Embedding Base URL',
         embedding_api_key: 'Embedding API Key',
         embedding_model: 'Embedding 模型',
+        notify_webhook_url: '通知推送地址',
+        notify_webhook_token: '通知推送 Token',
+        event_ingest_token: '事件同步 Token',
         approval_mode: '审批模式',
         confidence_threshold: '置信度阈值',
         rerank_weight_json: '重排权重 JSON',
@@ -959,6 +962,10 @@ const zhCN = {
         embedding: {
           title: 'Embedding 语义检索',
           hint: '填写 Embedding 模型名后，诊断 RAG 将启用语义向量加分重排；Base URL / API Key 缺省回退 LLM 配置，调用失败自动降级。',
+        },
+        integration: {
+          title: '集成与通知',
+          hint: '通知推送地址用于诊断完成后向外部系统（如 ITSM Webhook）推送根因/处理建议；事件同步 Token 用于外部流水线向控制台同步告警（X-Ingest-Token 头，留空放行）。Token 加密存储、脱敏展示。',
         },
         policy: {
           title: '诊断与审批策略',

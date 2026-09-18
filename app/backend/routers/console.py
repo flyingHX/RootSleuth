@@ -19,6 +19,7 @@ from models.kb_cases import Kb_cases
 from schemas.auth import UserResponse
 from services import console_kb
 from services.console_ai import run_diagnosis
+from services.notify_service import send_notification
 from services.kb_health import build_health_report
 from services.quality_scan import aggregate_quality_stats
 from services.llm_runtime import (
@@ -33,6 +34,7 @@ from services.console_common import (
     CONFIG_DESCRIPTIONS,
     ROLE_LEVELS,
     get_config,
+    now_iso,
     permissions_for,
     require_role,
     resolve_role,
@@ -913,3 +915,65 @@ async def test_llm_config(
         },
     )
     return result
+
+
+@router.post("/notify/test")
+async def test_notify_config(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """管理员连通性自检：向 notify_webhook_url 同步发送一条样例诊断通知并回显结果。
+
+    未配置通知地址返回 400；推送结果（状态码/耗时/错误）同步返回供前端展示，
+    且写入审计（脱敏：仅记录结果摘要，不含样例载荷与 Token）。
+    """
+    await require_role(db, current_user, "sys_admin")
+    url = ((await get_config(db, "notify_webhook_url", "")) or "").strip()
+    token = decrypt_secret((await get_config(db, "notify_webhook_token", "")) or "").strip()
+    if not url:
+        raise HTTPException(
+            status_code=400,
+            detail="notify_webhook_url 未配置，请先在配置中心「集成与通知」分组填写通知推送地址",
+        )
+    sample_payload = {
+        "source": "rootsleuth",
+        "event_type": "notify_test",
+        "event_id": "evt_notify_test",
+        "service_name": "demo-service",
+        "cluster": None,
+        "topology": None,
+        "error_type": None,
+        "severity": "info",
+        "template": "RootSleuth 通知连通性测试",
+        "status": "pending",
+        "degraded_reason": None,
+        "root_cause": "这是一条连通性测试消息：收到即代表通知链路配置正确",
+        "solution": "无需处理；如需真实告警通知请保持 notify_webhook_url 配置",
+        "command": None,
+        "confidence": None,
+        "trust_index": None,
+        "model": None,
+        "diagnosis_source": "test",
+        "diagnosed_at": now_iso(),
+    }
+    summary = await send_notification(url, token, sample_payload)
+    await write_audit(
+        db,
+        actor=current_user.email or current_user.id,
+        action="notify_config_test",
+        target_type="console_config",
+        target_id="notify_webhook",
+        after={
+            "ok": bool(summary.get("ok")),
+            "status_code": summary.get("status_code"),
+            "error": summary.get("error"),
+        },
+    )
+    return {
+        "ok": bool(summary.get("ok")),
+        "status_code": summary.get("status_code"),
+        "latency_ms": summary.get("latency_ms"),
+        "error": summary.get("error"),
+        "url": summary.get("url"),
+        "sample_payload": sample_payload,
+    }

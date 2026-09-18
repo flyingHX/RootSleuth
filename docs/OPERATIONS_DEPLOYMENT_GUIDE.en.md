@@ -566,3 +566,98 @@ journalctl -u aiops-pipeline -f
 | `REDIS_URL` | Redis connection | redis://localhost:6379/0 |
 | `ES_HOST` / `ES_INDEX` | ES cold storage | http://localhost:9200 / aiops-events |
 | `SERVICE_PORT` | Pipeline API port | 8080 (deployment example 8001, avoiding the console's 8000) |
+
+## 23. External System Integration and Post-Diagnosis Notification Push
+
+### 23.1 Event ingest API (upstream alerts → console events table)
+
+- Routes: `POST /api/v1/ingest/alerts` (single) and `POST /api/v1/ingest/alerts/batch` (batch ≤ 200).
+- The payload is compatible with the RAG webhook contract (source/raw_message/labels/timestamp); UMPS, Prometheus Alertmanager forwarding, and similar upstreams can integrate directly.
+- Idempotency: deduplication by event_id (an external event_id takes precedence; when absent, `evt_{epoch ms}_{first 8 of fingerprint}` is generated); the fingerprint matches the RAG webhook convention: `md5(source|service|error_type)`.
+- Auth: when the configured `event_ingest_token` is non-empty, requests must carry an exactly matching `X-Ingest-Token` header (401 otherwise); when empty, requests pass through (fail-open).
+
+| Payload field | Required | Mapping/notes |
+|---------------|----------|---------------|
+| source | No (default webhook) | Upstream identifier; part of the fingerprint |
+| raw_message | Recommended | Raw alert text, stored as raw_log; used for keyword classification |
+| labels | No | Service/cluster extraction (service/service_name/app/job, cluster/k8s_cluster); alertname as the template fallback |
+| timestamp | No | Millisecond/second epoch or ISO string, stored as created_at |
+| event_id | No | External event ID, the idempotency key |
+| error_type | No | When absent, keyword classification applies (gateway 502 / OOM / connection refused / disk full / CPU throttling / Redis pool exhausted / timeout) |
+| template | No | Falls back to labels.alertname or the first 120 chars of raw_message |
+| severity | No | Integer 1/2/3 → info/warning/critical; common text aliases mapped to the nearest level; default warning (a hit classification uses its default level) |
+| confidence / topology | No | Written to the corresponding event columns |
+| service_name / cluster / namespace | No | Explicit fields take precedence over labels; namespace is the last cluster fallback |
+
+```bash
+# Single alert
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts \
+  -H "Content-Type: application/json" -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"source":"webhook","raw_message":"Pod payment-7d9 OOMKilled, memory limit exceeded","labels":{"service":"payment","cluster":"c1"},"timestamp":1758209400000}'
+# Expected: {"accepted":1,"duplicated":0,"event_id":"...","total":1}
+
+# Batch
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts/batch \
+  -H "Content-Type: application/json" -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"events":[{"source":"webhook","raw_message":"..."},{"source":"webhook","raw_message":"..."}]}'
+# Expected: {"total":2,"accepted":2,"duplicated":0,"failed":0,"results":[{"event_id":"...","result":"accepted"},...]}
+```
+
+### 23.2 Post-diagnosis notification push (console → ITSM/UMPS)
+
+- Trigger points: after a successful single-round diagnosis (`/api/v1/console/events/{id}/diagnose`) or deep-diagnosis Agent (`/api/v1/console/agent/diagnose`) run is persisted; silently skipped when `notify_webhook_url` is not configured.
+- Notifications are fire-and-forget background tasks (10s per-call timeout): failures are logged only and never block the diagnosis response or trigger automatic retries; the payload is a snapshot of the persisted terminal state (diagnosed/degraded, etc.).
+
+| Notification field | Description |
+|--------------------|-------------|
+| source / event_type | Always `rootsleuth` / `diagnosis_completed` |
+| event_id / internal_id | External event ID and the console's internal id |
+| service_name / cluster / topology / error_type / severity / template / status / degraded_reason | Event metadata snapshot |
+| root_cause / solution / command | Diagnosis conclusions (root cause / remediation suggestion / fix command) |
+| confidence / trust_index | Confidence and Trust Index (trust_index from ai_output_json.quality) |
+| model / diagnosis_source / diagnosed_at | Model, diagnosis pipeline (single_round / agent), and diagnosis time |
+
+- Sample payload:
+
+```json
+{
+  "source": "rootsleuth",
+  "event_type": "diagnosis_completed",
+  "event_id": "E2E-EVT-001",
+  "internal_id": 51,
+  "service_name": "payment",
+  "cluster": "c1",
+  "error_type": "oom_killed",
+  "severity": "critical",
+  "template": "OOMKilled",
+  "status": "diagnosed",
+  "root_cause": "...",
+  "solution": "...",
+  "command": "...",
+  "confidence": 0.86,
+  "trust_index": 0.87,
+  "model": "<LLM model configured in the config center>",
+  "diagnosis_source": "single_round",
+  "diagnosed_at": "2026-09-18T09:02:42+00:00"
+}
+```
+
+- UMPS/ITSM mapping suggestions: `event_id` → external incident correlation key; `severity` → ticket priority (critical → P1/P2); `root_cause` + `solution` → ticket description / remediation plan body; when `confidence` / `trust_index` falls below the thresholds (config center `confidence_threshold` / the 0.85 Trust Index alert line), manual review is recommended.
+
+### 23.3 Configuration and connectivity verification
+
+Config center (sys_admin) "Integration & Notification" group:
+
+| Key | Description |
+|-----|-------------|
+| notify_webhook_url | Notification callback URL (must start with http(s) or be empty) |
+| notify_webhook_token | Notification Bearer token (stored encrypted, masked on read like `e2e-****oken`) |
+| event_ingest_token | Event ingest token (stored encrypted; once set, ingest requests must carry `X-Ingest-Token`) |
+
+Connectivity verification (recommended before go-live):
+
+```bash
+# Requires a logged-in token (sys_admin)
+curl -X POST http://127.0.0.1:8000/api/v1/console/notify/test -H "Authorization: Bearer <token>"
+# Expected: {"ok":true,"status_code":200,"latency_ms":32,"error":null,"url":"...","sample_payload":{...}}
+```

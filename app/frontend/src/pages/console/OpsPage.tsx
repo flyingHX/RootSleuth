@@ -537,6 +537,8 @@ const SECRET_KEYS = new Set([
   'diagnose_llm_api_key',
   'kb_governance_llm_api_key',
   'oncall_llm_api_key',
+  'notify_webhook_token',
+  'event_ingest_token',
 ]);
 
 /** Agent 独立接入配置键（provider / Base URL / API Key，留空逐项继承全局） */
@@ -621,6 +623,10 @@ const CONFIG_GROUPS: { id: string; keys: string[]; testable?: boolean; agent?: s
   {
     id: 'embedding',
     keys: ['embedding_base_url', 'embedding_api_key', 'embedding_model'],
+  },
+  {
+    id: 'integration',
+    keys: ['notify_webhook_url', 'notify_webhook_token', 'event_ingest_token'],
   },
   {
     id: 'policy',

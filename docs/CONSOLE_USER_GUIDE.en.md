@@ -129,8 +129,37 @@ The same semantics apply to the **Agent Workbench**: deep diagnosis (conclusion 
 | feature_flags_json | Feature flags (auto_diagnose/dedup_scan) |
 | default_role | Default role for unbound users |
 | role_bindings_json | Email → role binding mapping |
+| notify_webhook_url | Post-diagnosis notification callback URL (http(s), e.g. ITSM/UMPS webhook; leave empty to disable pushes) |
+| notify_webhook_token | Notification callback Bearer token (stored encrypted, displayed masked; leave empty to omit the auth header) |
+| event_ingest_token | X-Ingest-Token auth token for the event ingest API (stored encrypted, displayed masked; leave empty to allow unauthenticated pushes) |
 
 - Changes take effect immediately and write a `config_update` audit record. Each Agent group offers a "Test connectivity" button (`POST /api/v1/console/configs/llm-test?agent=diagnose|kb_governance|oncall`) that returns the resolved model/timeout/provider and `access_source` (agent=independent config in effect / global=inherited), and API keys are never echoed.
+
+### External system integration & post-diagnosis notification push
+
+RootSleuth provides two external integration paths: upstream pipelines push alerts into the console via the "event ingest API"; after diagnosis completes, conclusions are pushed to external systems (e.g. ITSM ticketing / UMPS) via "notification push".
+
+**Event ingest API (alert intake)**
+
+- `POST /api/v1/ingest/alerts` for single alerts and `POST /api/v1/ingest/alerts/batch` for batches (≤ 200 per call); payloads follow the RAG webhook contract (`source` / `raw_message` / `labels` / `timestamp`, optional `event_id` / `error_type` / `template` / `severity` / `confidence` / `topology`).
+- When `error_type` is missing, events are auto-classified by keywords (gateway 502 / OOM / connection refused / disk full / CPU throttling / Redis pool exhausted / timeout); deduplication is keyed by `event_id` — duplicate pushes return `duplicated` without re-inserting; events enter the Alert Workbench as `pending` awaiting diagnosis.
+- Auth: when `event_ingest_token` is non-empty, requests must carry an exactly matching `X-Ingest-Token` header (mismatch returns 401); when empty, requests pass through (consistent with the RAG fail-open semantics).
+
+```bash
+curl -X POST http://<console-host>:8000/api/v1/ingest/alerts \
+  -H "Content-Type: application/json" \
+  -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"source":"webhook","raw_message":"Pod payment-7d9 OOMKilled, memory limit exceeded","labels":{"service":"payment","cluster":"c1"},"timestamp":1758209400000}'
+# Expected: {"accepted":1,"duplicated":0,"event_id":"...","total":1}
+```
+
+**Post-diagnosis notification push (console → ITSM/UMPS)**
+
+- After a successful single-round diagnosis or deep-diagnosis Agent run, the system asynchronously pushes the root cause (`root_cause`), remediation suggestion (`solution`), fix command (`command`), confidence (`confidence`), Trust Index (`trust_index`), and event metadata to `notify_webhook_url`; when `notify_webhook_token` is set, an `Authorization: Bearer <token>` header is attached.
+- The push is best-effort (10s timeout, fire-and-forget): failures are logged only and never block the diagnosis or trigger retries; without a callback URL the push is silently skipped.
+- The "Integration & Notification" group offers a "Test connectivity" button (`POST /api/v1/console/notify/test`, sys_admin): it sends a sample payload to the callback URL and returns the status code/latency, for pre-go-live verification of external reachability.
+
+For the field mapping table and UMPS/ITSM mapping suggestions (operator view), see `docs/OPERATIONS_DEPLOYMENT_GUIDE.en.md` §23.
 
 ### Knowledge health risk closed loop (kb_admin and above)
 

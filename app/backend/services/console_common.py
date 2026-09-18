@@ -86,6 +86,9 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "kb_expire_unconditional_days": "180",
     "rag_sync_retry_base_seconds": "30",
     "rag_sync_max_attempts": "5",
+    "notify_webhook_url": "",
+    "notify_webhook_token": "",
+    "event_ingest_token": "",
     "feature_flags_json": '{"auto_diagnose":true,"dedup_scan":true}',
     # 未绑定角色用户的默认角色设为 sre：保证真实账号登录后可见三类 Agent 操作按钮（viewer 只读会全部隐藏）；
     # 安全红线不变：default_role 校验禁止设为 sys_admin
@@ -128,6 +131,9 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "embedding_model": "Embedding 模型名称（配置后启用诊断 RAG 语义加分，如 bge-m3）",
     "rag_base_url": "RAG 检索服务 Base URL（如 http://rag:8080；留空表示未部署，知识索引同步自动跳过）",
     "rag_api_key": "RAG 服务间鉴权 API Key（RAG 启用 RAG_API_KEYS_JSON 时必填；服务端加密存储、脱敏展示；留空表示 RAG 侧鉴权关闭）",
+    "notify_webhook_url": "诊断后通知推送 Webhook 地址（如 ITSM 工单系统；须以 http:// 或 https:// 开头；留空表示不推送）",
+    "notify_webhook_token": "通知推送鉴权 Token（以 Authorization: Bearer 头随通知一并携带；加密存储、脱敏展示；留空表示不携带鉴权头）",
+    "event_ingest_token": "事件同步入口鉴权 Token（外部系统 POST /api/v1/ingest/alerts 须携带 X-Ingest-Token 头精确匹配；加密存储、脱敏展示；留空表示不鉴权放行，与 RAG fail-open 口径一致）",
     "kb_expire_days": "知识老化归档天数（生命周期巡检：老化且负反馈的活跃案例归档淘汰）",
     "kb_expire_unconditional_days": "知识无条件老化天数（健康报表红级阈值；0 或留空 = 2×kb_expire_days）",
     "feature_flags_json": "功能开关 JSON（auto_diagnose/dedup_scan 等）",
@@ -408,6 +414,15 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
     if key in ("llm_api_key", "embedding_api_key", "rag_api_key"):
         if "****" in value:
             return False, f"{key} 展示为脱敏格式，请输入完整 API Key（或留空清除）"
+        return True, "ok"
+    if key == "notify_webhook_url":
+        value = value.strip()
+        if value and not value.startswith(("http://", "https://")):
+            return False, "notify_webhook_url 必须以 http:// 或 https:// 开头（或留空表示不推送）"
+        return True, "ok"
+    if key in ("notify_webhook_token", "event_ingest_token"):
+        if "****" in value:
+            return False, f"{key} 展示为脱敏格式，请输入完整 Token（或留空清除）"
         return True, "ok"
     if key == "llm_model":
         if not value.strip() or "****" in value:

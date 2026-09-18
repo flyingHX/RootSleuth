@@ -129,8 +129,37 @@
 | feature_flags_json | 功能开关（auto_diagnose/dedup_scan） |
 | default_role | 未绑定用户默认角色 |
 | role_bindings_json | 邮箱 → 角色绑定映射 |
+| notify_webhook_url | 诊断后通知回调地址（http(s) 开头，如 ITSM/UMPS webhook；留空不推送） |
+| notify_webhook_token | 通知回调 Bearer Token（加密存储、脱敏展示；留空不携带鉴权头） |
+| event_ingest_token | 事件同步入口 X-Ingest-Token 鉴权令牌（加密存储、脱敏展示；留空放行） |
 
 - 修改即时生效并写 `config_update` 审计。三个 Agent 分组均提供「测试连通性」按钮（`POST /api/v1/console/configs/llm-test?agent=diagnose|kb_governance|oncall`），返回按继承规则解析后的实际模型/超时/接入方式与 `access_source`（agent=独立配置生效 / global=继承全局），API Key 永不回显。
+
+### 外部系统接入与诊断通知推送
+
+RootSleuth 提供两条外部集成链路：上游流水线经「事件同步入口」推送告警进控制台；诊断完成后将结论「通知推送」到外部系统（如 ITSM 工单/UMPS）。
+
+**事件同步入口（告警接入）**
+
+- `POST /api/v1/ingest/alerts` 单条、`POST /api/v1/ingest/alerts/batch` 批量（单次 ≤ 200 条）；载荷兼容 RAG webhook 契约（`source` / `raw_message` / `labels` / `timestamp`，可选 `event_id` / `error_type` / `template` / `severity` / `confidence` / `topology`）。
+- 缺 `error_type` 时按关键词自动分类（网关 502 / OOM / 连接拒绝 / 磁盘满 / CPU 限流 / Redis 连接池耗尽 / 超时）；按 `event_id` 幂等去重，重复推送返回 `duplicated` 不重复入库；事件以 `pending` 状态进入告警工作台等待诊断。
+- 鉴权：`event_ingest_token` 非空时请求必须携带精确匹配的 `X-Ingest-Token` 头（不匹配返回 401）；留空放行（与 RAG fail-open 口径一致）。
+
+```bash
+curl -X POST http://<console-host>:8000/api/v1/ingest/alerts \
+  -H "Content-Type: application/json" \
+  -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"source":"webhook","raw_message":"Pod payment-7d9 OOMKilled, memory limit exceeded","labels":{"service":"payment","cluster":"c1"},"timestamp":1758209400000}'
+# 期望：{"accepted":1,"duplicated":0,"event_id":"...","total":1}
+```
+
+**诊断后通知推送（控制台 → ITSM/UMPS）**
+
+- 单轮诊断与深度诊断 Agent 成功落库后，系统将根因（`root_cause`）、处置建议（`solution`）、修复命令（`command`）、置信度（`confidence`）、Trust Index（`trust_index`）及事件元信息异步推送到 `notify_webhook_url`；配置 `notify_webhook_token` 时携带 `Authorization: Bearer <token>` 头。
+- 推送为尽力而为的旁路（10 秒超时、fire-and-forget）：失败仅记日志，不阻塞诊断、不重试；未配置回调地址时静默跳过。
+- 「集成与通知」分组提供「测试连通性」按钮（`POST /api/v1/console/notify/test`，sys_admin）：向回调地址发送样例载荷并返回状态码/耗时，用于上线前验证外部系统可达性。
+
+字段映射表与 UMPS/ITSM 映射建议（运维视角）见 `docs/OPERATIONS_DEPLOYMENT_GUIDE.md` §23。
 
 ### 知识健康风险闭环（kb_admin 及以上）
 

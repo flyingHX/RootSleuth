@@ -439,6 +439,16 @@ export interface ConfigItem {
   is_secret?: boolean;
 }
 
+/** 通知推送连通性自检结果（POST /api/v1/console/notify/test） */
+export interface NotifyTestResult {
+  ok: boolean;
+  status_code?: number | null;
+  latency_ms?: number | null;
+  error?: string | null;
+  url?: string | null;
+  sample_payload?: Record<string, unknown>;
+}
+
 /** LLM/Embedding 配置连通性自检结果 */
 export interface LlmTestResult {
   chat: {
@@ -808,6 +818,8 @@ export const consoleApi = {
       'POST',
       {},
     ),
+  testNotifyConfig: () =>
+    invoke<NotifyTestResult>('/api/v1/console/notify/test', 'POST', {}),
 
   // Agent：诊断 / 知识治理 / 值班
   agentDiagnose: (eventId: number) =>

@@ -27,6 +27,7 @@ from models.kb_cases import Kb_cases
 from schemas.aihub import ChatMessage
 from services import llm_runtime
 from services.console_common import get_config, write_audit, now_iso
+from services.notify_service import notify_after_diagnosis
 from services.quality_scan import evaluate_diagnosis_quality
 
 logger = logging.getLogger(__name__)
@@ -411,6 +412,16 @@ async def run_diagnosis(
             "trust_index": quality["trust_index"],
             "quality_ok": quality["quality_ok"],
             "elapsed_ms": elapsed_ms,
+        },
+    )
+
+    await notify_after_diagnosis(
+        db,
+        event,
+        extra={
+            "diagnosis_source": "single_round",
+            "model": model_name,
+            "diagnosed_at": now_iso(),
         },
     )
 

@@ -46,6 +46,7 @@ from services.console_ai import (
     score_case,
 )
 from services.console_common import get_config, mask_sensitive, now_iso, write_audit
+from services.notify_service import notify_after_diagnosis
 from services.quality_scan import GATE_LINE, evaluate_diagnosis_quality
 
 logger = logging.getLogger(__name__)
@@ -1181,6 +1182,16 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
                 "time_budget_seconds": time_budget,
                 "context_fingerprint": stability["context_fingerprint"],
                 "rule_version": snapshot["rule_version"],
+            },
+        )
+        await notify_after_diagnosis(
+            db,
+            event,
+            extra={
+                "diagnosis_source": "agent",
+                "model": model_name,
+                "session_id": row.id,
+                "diagnosed_at": now_iso(),
             },
         )
         return {

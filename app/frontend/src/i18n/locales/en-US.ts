@@ -932,6 +932,9 @@ const enUS = {
         embedding_base_url: 'Embedding Base URL',
         embedding_api_key: 'Embedding API Key',
         embedding_model: 'Embedding Model',
+        notify_webhook_url: 'Notification webhook URL',
+        notify_webhook_token: 'Notification webhook token',
+        event_ingest_token: 'Event ingest token',
         approval_mode: 'Approval Mode',
         confidence_threshold: 'Confidence threshold',
         rerank_weight_json: 'Rerank weights JSON',
@@ -959,6 +962,10 @@ const enUS = {
         embedding: {
           title: 'Embedding Semantic Retrieval',
           hint: 'After an Embedding model name is set, diagnosis RAG enables semantic vector-score boosting in reranking; Base URL / API Key fall back to the LLM config when omitted, and failures degrade automatically.',
+        },
+        integration: {
+          title: 'Integrations & Notifications',
+          hint: 'The notification webhook URL receives root-cause/solution pushes after diagnosis (e.g., an ITSM webhook); the event ingest token guards pipeline-to-console alert syncing (X-Ingest-Token header, empty means open access). Tokens are stored encrypted and shown masked.',
         },
         policy: {
           title: 'Diagnosis & Approval Policy',

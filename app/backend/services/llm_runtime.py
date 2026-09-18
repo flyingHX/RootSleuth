@@ -41,6 +41,8 @@ SECRET_CONFIG_KEYS = (
     "diagnose_llm_api_key",
     "kb_governance_llm_api_key",
     "oncall_llm_api_key",
+    "notify_webhook_token",
+    "event_ingest_token",
 )
 
 

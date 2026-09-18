@@ -564,3 +564,98 @@ journalctl -u aiops-pipeline -f
 | `REDIS_URL` | Redis 连接 | redis://localhost:6379/0 |
 | `ES_HOST` / `ES_INDEX` | ES 冷存储 | http://localhost:9200 / aiops-events |
 | `SERVICE_PORT` | 流水线 API 端口 | 8080（部署示例 8001，避开控制台 8000） |
+
+## 23. 外部系统接入与诊断通知推送
+
+### 23.1 事件同步入口（上游告警 → 控制台事件表）
+
+- 路由：`POST /api/v1/ingest/alerts`（单条）、`POST /api/v1/ingest/alerts/batch`（批量 ≤ 200 条）。
+- 载荷兼容 RAG webhook 契约（source/raw_message/labels/timestamp）；UMPS、Prometheus Alertmanager 转发等上游可直接接入。
+- 幂等：按 event_id 去重（外部 event_id 优先；未提供时生成 `evt_{毫秒时间戳}_{指纹前8位}`）；指纹与 RAG webhook 同口径：`md5(source|service|error_type)`。
+- 鉴权：配置中心 `event_ingest_token` 非空 → 请求必须携带精确匹配的 `X-Ingest-Token` 头（不匹配 401）；留空 → fail-open 放行。
+
+| 载荷字段 | 必填 | 映射/说明 |
+|----------|------|-----------|
+| source | 否（默认 webhook） | 上游标识，参与指纹计算 |
+| raw_message | 建议 | 告警原文，写入 raw_log；参与关键词分类 |
+| labels | 否 | 服务/集群提取（service/service_name/app/job、cluster/k8s_cluster）；alertname 兜底模板 |
+| timestamp | 否 | 毫秒/秒时间戳或 ISO 字符串，写入 created_at |
+| event_id | 否 | 外部事件 ID，幂等去重键 |
+| error_type | 否 | 缺省时按关键词分类（网关 502 / OOM / 连接拒绝 / 磁盘满 / CPU 限流 / Redis 连接池耗尽 / 超时） |
+| template | 否 | 缺省取 labels.alertname 或 raw_message 前 120 字符 |
+| severity | 否 | 整数 1/2/3 → info/warning/critical；常见文本别名就近映射；缺省 warning（分类命中时用分类默认级别） |
+| confidence / topology | 否 | 写入事件表对应列 |
+| service_name / cluster / namespace | 否 | 显式字段优先于 labels；namespace 作为集群最后兜底 |
+
+```bash
+# 单条同步
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts \
+  -H "Content-Type: application/json" -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"source":"webhook","raw_message":"Pod payment-7d9 OOMKilled, memory limit exceeded","labels":{"service":"payment","cluster":"c1"},"timestamp":1758209400000}'
+# 期望：{"accepted":1,"duplicated":0,"event_id":"...","total":1}
+
+# 批量同步
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts/batch \
+  -H "Content-Type: application/json" -H "X-Ingest-Token: <event_ingest_token>" \
+  -d '{"events":[{"source":"webhook","raw_message":"..."},{"source":"webhook","raw_message":"..."}]}'
+# 期望：{"total":2,"accepted":2,"duplicated":0,"failed":0,"results":[{"event_id":"...","result":"accepted"},...]}
+```
+
+### 23.2 诊断后通知推送（控制台 → ITSM/UMPS）
+
+- 触发点：单轮诊断（`/api/v1/console/events/{id}/diagnose`）与深度诊断 Agent（`/api/v1/console/agent/diagnose`）结论成功落库后；未配置 `notify_webhook_url` 时静默跳过。
+- 通知为 fire-and-forget 后台任务（单次 10 秒超时）：失败仅记日志，不阻塞诊断响应、不自动重试；事件处于已诊断/降级等终态时按落库快照推送。
+
+| 通知字段 | 说明 |
+|----------|------|
+| source / event_type | 恒为 `rootsleuth` / `diagnosis_completed` |
+| event_id / internal_id | 外部事件 ID 与控制台内部 id |
+| service_name / cluster / topology / error_type / severity / template / status / degraded_reason | 事件元信息快照 |
+| root_cause / solution / command | 诊断结论（根因 / 处置建议 / 修复命令） |
+| confidence / trust_index | 置信度与 Trust Index（trust_index 取自 ai_output_json.quality） |
+| model / diagnosis_source / diagnosed_at | 模型、诊断链路（single_round / agent）与诊断时间 |
+
+- 载荷示例：
+
+```json
+{
+  "source": "rootsleuth",
+  "event_type": "diagnosis_completed",
+  "event_id": "E2E-EVT-001",
+  "internal_id": 51,
+  "service_name": "payment",
+  "cluster": "c1",
+  "error_type": "oom_killed",
+  "severity": "critical",
+  "template": "OOMKilled",
+  "status": "diagnosed",
+  "root_cause": "……",
+  "solution": "……",
+  "command": "……",
+  "confidence": 0.86,
+  "trust_index": 0.87,
+  "model": "<配置中心指定的 LLM 模型>",
+  "diagnosis_source": "single_round",
+  "diagnosed_at": "2026-09-18T09:02:42+00:00"
+}
+```
+
+- UMPS/ITSM 映射建议：`event_id` → 外部事件关联键；`severity` → 工单优先级（critical → P1/P2）；`root_cause` + `solution` → 工单描述/处置方案正文；`confidence` / `trust_index` 低于阈值（配置中心 `confidence_threshold` / 0.85 Trust Index 告警线）时建议转人工复核。
+
+### 23.3 配置与连通性验证
+
+配置中心（sys_admin）「集成与通知」分组：
+
+| 键 | 说明 |
+|----|------|
+| notify_webhook_url | 通知回调地址（http(s) 开头或留空） |
+| notify_webhook_token | 通知 Bearer Token（加密存储，回显脱敏形如 `e2e-****oken`） |
+| event_ingest_token | 事件同步令牌（加密存储；配置后 ingest 请求必须携带 `X-Ingest-Token`） |
+
+连通性验证（上线前建议先执行）：
+
+```bash
+# 需登录态（sys_admin）
+curl -X POST http://127.0.0.1:8000/api/v1/console/notify/test -H "Authorization: Bearer <token>"
+# 期望：{"ok":true,"status_code":200,"latency_ms":32,"error":null,"url":"...","sample_payload":{...}}
+```
