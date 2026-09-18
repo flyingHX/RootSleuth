@@ -1,5 +1,7 @@
 # RootSleuth 运营控制台后端
 
+[English](README.en.md) | 简体中文
+
 > 项目定位：本目录是 RootSleuth 运营控制台的 FastAPI 后端。项目总览与目录关系见仓库根目录 `README.md`，使用手册见 `docs/CONSOLE_USER_GUIDE.md`，运维部署见 `docs/OPERATIONS_DEPLOYMENT_GUIDE.md`。
 
 ## 技术栈

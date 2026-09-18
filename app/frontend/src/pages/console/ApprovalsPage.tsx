@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDot, Clock, Undo2, XCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 import {
   consoleApi,
   errDetail,
@@ -37,25 +38,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
-const BIZ_TYPE_LABEL: Record<string, string> = {
-  kb_edit: '知识库变更',
-  kb_rollback: '知识库回滚',
-  kb_merge: '知识合并',
-  merge: '知识合并',
-  rule_publish: '规则发布',
-  rule_promote: '模板晋升',
-  template_promote: '模板晋升',
-};
-
-const STEP_ACTION_META: Record<string, { label: string; icon: typeof CircleDot; className: string }> = {
-  pending: { label: '待审批', icon: CircleDot, className: 'text-muted-foreground' },
-  approved: { label: '已通过', icon: CheckCircle2, className: 'text-teal-600' },
-  rejected: { label: '已拒绝', icon: XCircle, className: 'text-destructive' },
-  withdrawn: { label: '已撤回', icon: Undo2, className: 'text-muted-foreground' },
-  skipped: { label: '已跳过', icon: Undo2, className: 'text-muted-foreground' },
+const STEP_ACTION_META: Record<string, { icon: typeof CircleDot; className: string }> = {
+  pending: { icon: CircleDot, className: 'text-muted-foreground' },
+  approved: { icon: CheckCircle2, className: 'text-teal-600' },
+  rejected: { icon: XCircle, className: 'text-destructive' },
+  withdrawn: { icon: Undo2, className: 'text-muted-foreground' },
+  skipped: { icon: Undo2, className: 'text-muted-foreground' },
 };
 
 function StepTimeline({ request }: { request: ApprovalRequest }) {
+  const { t } = useTranslation();
   return (
     <ol className="mt-3 space-y-2.5 border-l pl-4">
       {request.steps.map((s) => {
@@ -65,14 +57,14 @@ function StepTimeline({ request }: { request: ApprovalRequest }) {
           <li key={s.id} className="relative">
             <Icon className={cn('absolute -left-[21.5px] h-4 w-4 bg-card', meta.className)} />
             <div className="flex flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium">步骤 {s.step_no} · {s.approver_role_label}</span>
+              <span className="font-medium">{t('approvals.stepLabel', { no: s.step_no, role: s.approver_role_label })}</span>
               <Badge variant={s.action === 'approved' ? 'default' : s.action === 'rejected' ? 'destructive' : 'outline'}>
-                {meta.label}
+                {t(`approvals.stepAction.${s.action}`, { defaultValue: s.action })}
               </Badge>
               {s.approver && <span className="text-muted-foreground">{s.approver}</span>}
               {s.acted_at && <span className="text-muted-foreground">{fmtTime(s.acted_at, false)}</span>}
             </div>
-            {s.comment && <p className="mt-1 text-xs text-muted-foreground">备注：{s.comment}</p>}
+            {s.comment && <p className="mt-1 text-xs text-muted-foreground">{t('approvals.remark', { comment: s.comment })}</p>}
           </li>
         );
       })}
@@ -80,36 +72,38 @@ function StepTimeline({ request }: { request: ApprovalRequest }) {
   );
 }
 
-/** 案例库全部字段的展示顺序与中文标签（审批内容完整展示用）。 */
-const CASE_FIELD_LABELS: Record<string, string> = {
-  case_id: '案例 ID',
-  error_type: '错误类型',
-  service_name: '服务名',
-  cluster: '集群',
-  alert_template: '告警模板',
-  root_cause: '根因',
-  solution: '处置方案',
-  topology_snapshot: '拓扑快照',
-  status: '状态',
-  version: '版本',
-  feedback_score: '反馈分',
-};
+/** 案例库全部字段的展示顺序（审批内容完整展示用，标签文案经 i18n 提供）。 */
+const CASE_FIELD_ORDER = [
+  'case_id',
+  'error_type',
+  'service_name',
+  'cluster',
+  'alert_template',
+  'root_cause',
+  'solution',
+  'topology_snapshot',
+  'status',
+  'version',
+  'feedback_score',
+];
 
 /** 完整案例字段卡片：按案例库字段顺序展示全部业务字段，未填写字段显式标注。 */
 function CaseFieldsCard({ label, fields, missing }: { label: string; fields: Record<string, unknown>; missing?: string[] }) {
+  const { t } = useTranslation();
+  const fieldLabel = (f: string) => t(`approvals.caseFields.${f}`, { defaultValue: f });
   const missingSet = new Set(missing ?? []);
   return (
     <div className="rounded-md border bg-background p-2.5">
       <p className="mb-1.5 text-xs font-medium">{label}</p>
       <div className="space-y-1.5">
-        {Object.entries(CASE_FIELD_LABELS).map(([key, lbl]) => {
+        {CASE_FIELD_ORDER.map((key) => {
           const v = fields[key];
           const empty = v === null || v === undefined || v === '';
           return (
             <div key={key} className="grid grid-cols-[84px_1fr] gap-x-2 text-xs">
-              <span className="pt-0.5 text-muted-foreground">{lbl}</span>
+              <span className="pt-0.5 text-muted-foreground">{fieldLabel(key)}</span>
               {empty ? (
-                <span className="italic text-muted-foreground/70">{missingSet.has(key) ? '（未填写）' : '—'}</span>
+                <span className="italic text-muted-foreground/70">{missingSet.has(key) ? t('approvals.notFilled') : '—'}</span>
               ) : typeof v === 'string' && v.length > 60 ? (
                 <pre className="log-block">{v}</pre>
               ) : (
@@ -125,11 +119,12 @@ function CaseFieldsCard({ label, fields, missing }: { label: string; fields: Rec
 
 /** 关联日志实例样本卡片：作为审批证据展示，最多 5 条。 */
 function EventSamplesCard({ title, events }: { title: string; events: ApprovalEventSample[] }) {
+  const { t } = useTranslation();
   return (
     <div className="rounded-md border bg-background p-2.5">
       <p className="mb-1.5 text-xs font-medium">
         {title}
-        <span className="ml-1.5 font-normal text-muted-foreground">共 {events.length} 条（最近样本，证据用途）</span>
+        <span className="ml-1.5 font-normal text-muted-foreground">{t('approvals.sampleCount', { count: events.length })}</span>
       </p>
       <div className="space-y-1.5">
         {events.map((ev) => (
@@ -151,21 +146,23 @@ function EventSamplesCard({ title, events }: { title: string; events: ApprovalEv
 
 /** 审批业务内容：kb_edit 展示字段级 diff（create 另附案例库完整字段与日志样本），merge 展示合并双方完整案例与合并策略，rule_promote 展示模板、规则条目预览与日志样本。 */
 function ApprovalContentSection({ requestId }: { requestId: number }) {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
   const query = useQuery({
     queryKey: ['approval-content', requestId],
     queryFn: () => consoleApi.getApprovalContent(requestId),
   });
 
-  if (query.isLoading) return <SpinnerLine text="加载审批内容…" />;
+  if (query.isLoading) return <SpinnerLine text={t('approvals.loadingContent')} />;
   if (query.isError) {
-    return <ErrorBlock message={`审批内容加载失败：${errDetail(query.error)}`} onRetry={() => query.refetch()} />;
+    return <ErrorBlock message={t('approvals.loadFailed', { error: errDetail(query.error) })} onRetry={() => query.refetch()} />;
   }
 
   const data = query.data;
   if (!data || !data.content) {
     return (
       <div className="rounded-md border border-dashed px-3 py-3 text-xs text-muted-foreground">
-        该审批单暂无可展示的业务内容。
+        {t('approvals.noContent')}
       </div>
     );
   }
@@ -176,34 +173,34 @@ function ApprovalContentSection({ requestId }: { requestId: number }) {
     return (
       <div className="space-y-2 rounded-md border bg-muted/30 p-3">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="outline">变更集 #{cs.id}</Badge>
+          <Badge variant="outline">{t('approvals.changeSetBadge', { id: cs.id })}</Badge>
           <span className="font-mono font-medium">{cs.case_id}</span>
-          <span>{cs.change_type === 'create' ? '新建案例' : '更新案例'}</span>
-          {cs.version !== null && cs.version !== undefined && <Badge variant="outline">目标版本 v{cs.version}</Badge>}
+          <span>{cs.change_type === 'create' ? t('approvals.changeCreate') : t('approvals.changeUpdate')}</span>
+          {cs.version !== null && cs.version !== undefined && <Badge variant="outline">{t('approvals.targetVersion', { version: cs.version })}</Badge>}
           <StatusBadge status={cs.status} />
           <span className="text-muted-foreground">{cs.created_by}</span>
         </div>
-        {cs.reason && <p className="text-xs text-muted-foreground">变更理由：{cs.reason}</p>}
+        {cs.reason && <p className="text-xs text-muted-foreground">{t('approvals.changeReason', { reason: cs.reason })}</p>}
         {cs.content_scan && (
           <ContentScanCard
             scan={cs.content_scan}
-            title={cs.content_scan.override ? '内容安全扫描（人工误报放行）' : '内容安全扫描'}
+            title={cs.content_scan.override ? t('approvals.scanTitleOverride') : t('approvals.scanTitle')}
           />
         )}
         {entries.length > 0 ? (
           <DiffTable entries={entries} />
         ) : (
-          <p className="text-xs text-muted-foreground">该变更没有字段级差异。</p>
+          <p className="text-xs text-muted-foreground">{t('approvals.noDiff')}</p>
         )}
         {cs.change_type === 'create' && cs.full_case && (
           <CaseFieldsCard
-            label="新建案例完整字段（案例库全部字段）"
+            label={t('approvals.fullCaseCreateLabel')}
             fields={cs.full_case as unknown as Record<string, unknown>}
             missing={cs.full_case.missing_fields}
           />
         )}
         {cs.related_events && cs.related_events.length > 0 && (
-          <EventSamplesCard title="关联日志实例" events={cs.related_events} />
+          <EventSamplesCard title={t('approvals.relatedEventsTitle')} events={cs.related_events} />
         )}
       </div>
     );
@@ -211,38 +208,39 @@ function ApprovalContentSection({ requestId }: { requestId: number }) {
 
   if (data.biz_type === 'merge') {
     const p = data.content as MergeProposal;
+    const listJoiner = zh ? '、' : ', ';
     return (
       <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">合并提案 #{p.id}</Badge>
+          <Badge variant="outline">{t('approvals.mergeProposalBadge', { id: p.id })}</Badge>
           <span className="font-mono font-medium">{p.master_case_id}</span>
-          <span className="text-muted-foreground">（主案例，合并后保留）</span>
+          <span className="text-muted-foreground">{t('approvals.masterCaseHint')}</span>
           <StatusBadge status={p.status} />
         </div>
         {p.master_case ? (
           <CaseFieldsCard
-            label={`主案例完整内容：${p.master_case.case_id}`}
+            label={t('approvals.masterCaseLabel', { id: p.master_case.case_id })}
             fields={p.master_case as unknown as Record<string, unknown>}
           />
         ) : (
           <p className="rounded-md border border-dashed px-2.5 py-1.5 text-muted-foreground">
-            主案例 {p.master_case_id} 暂不存在。
+            {t('approvals.masterMissing', { id: p.master_case_id })}
           </p>
         )}
         <p className="text-muted-foreground">
-          归档冗余案例：{p.merged_case_ids.length > 0 ? p.merged_case_ids.join('、') : '（无）'}
+          {t('approvals.mergedCasesLine', { list: p.merged_case_ids.length > 0 ? p.merged_case_ids.join(listJoiner) : t('approvals.noneLabel') })}
         </p>
         {p.merged_cases && p.merged_cases.length > 0 && (
           <div className="space-y-2">
             {p.merged_cases.map((mc) =>
               'missing' in mc ? (
                 <p key={mc.case_id} className="rounded-md border border-dashed px-2.5 py-1.5 text-muted-foreground">
-                  案例 {mc.case_id} 已不存在（合并执行时将自动跳过）。
+                  {t('approvals.mergedCaseMissing', { id: mc.case_id })}
                 </p>
               ) : (
                 <CaseFieldsCard
                   key={mc.case_id}
-                  label={`被合并案例完整内容：${mc.case_id}`}
+                  label={t('approvals.mergedCaseLabel', { id: mc.case_id })}
                   fields={mc as unknown as Record<string, unknown>}
                 />
               ),
@@ -251,42 +249,43 @@ function ApprovalContentSection({ requestId }: { requestId: number }) {
         )}
         {p.merge_strategy && (
           <div className="rounded-md border bg-background p-2.5">
-            <p className="mb-1.5 font-medium">合并策略</p>
+            <p className="mb-1.5 font-medium">{t('approvals.mergeStrategyTitle')}</p>
             <JsonPre data={p.merge_strategy} />
           </div>
         )}
-        {p.reason && <p className="text-muted-foreground">合并理由：{p.reason}</p>}
+        {p.reason && <p className="text-muted-foreground">{t('approvals.mergeReason', { reason: p.reason })}</p>}
         <p className="text-muted-foreground">
-          发起人：{p.created_by ?? '—'} · 关联审批单：#{p.approval_request_id ?? '—'}
+          {t('approvals.initiatorLine', { by: p.created_by ?? '—', approval: p.approval_request_id ?? '—' })}
         </p>
       </div>
     );
   }
 
-  const t = data.content as UnknownTemplate;
+  const tpl = data.content as UnknownTemplate;
   return (
     <div className="space-y-2 rounded-md border bg-muted/30 p-3 text-xs">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">未知模板 #{t.id}</Badge>
-        <span>样本 {t.sample_count ?? 0} 条</span>
-        <span className="text-muted-foreground">最近出现服务：{t.last_seen_service || '—'}</span>
-        <StatusBadge status={t.status} />
+        <Badge variant="outline">{t('approvals.unknownTemplateBadge', { id: tpl.id })}</Badge>
+        <span>{t('approvals.sampleCountShort', { count: tpl.sample_count ?? 0 })}</span>
+        <span className="text-muted-foreground">{t('approvals.lastSeenService', { service: tpl.last_seen_service || '—' })}</span>
+        <StatusBadge status={tpl.status} />
       </div>
-      <pre className="log-block">{t.template}</pre>
+      <pre className="log-block">{tpl.template}</pre>
       <p>
-        晋升目标分类：<span className="font-medium">{t.suggested_error_type || 'unknown'}</span>
-        （终审通过后将自动追加规则条目并发布新版本）
+        {t('approvals.promoteTargetLabel')}
+        <span className="font-medium">{tpl.suggested_error_type || 'unknown'}</span>
+        {t('approvals.promoteHint')}
       </p>
-      {t.proposed_rule_entry && (
+      {tpl.proposed_rule_entry && (
         <div className="rounded-md border bg-background p-2.5">
-          <p className="mb-1.5 font-medium">晋升后新增规则条目（预览即所得）</p>
-          <JsonPre data={t.proposed_rule_entry} />
+          <p className="mb-1.5 font-medium">{t('approvals.ruleEntryPreview')}</p>
+          <JsonPre data={tpl.proposed_rule_entry} />
         </div>
       )}
-      {t.related_events && t.related_events.length > 0 ? (
-        <EventSamplesCard title="关联日志实例" events={t.related_events} />
+      {tpl.related_events && tpl.related_events.length > 0 ? (
+        <EventSamplesCard title={t('approvals.relatedEventsTitle')} events={tpl.related_events} />
       ) : (
-        <p className="text-muted-foreground">暂无匹配的日志实例（按标准化模板与服务名检索）。</p>
+        <p className="text-muted-foreground">{t('approvals.noRelatedEvents')}</p>
       )}
     </div>
   );
@@ -297,48 +296,52 @@ function DecisionDialog({ request, action, onClose }: {
   action: 'approve' | 'reject';
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [comment, setComment] = useState('');
   const mutation = useMutation({
     mutationFn: () => consoleApi.decideApproval(request.id, action, comment),
     onSuccess: (res) => {
-      toast.success(action === 'approve' ? '已通过审批' : '已拒绝审批');
+      toast.success(action === 'approve' ? t('approvals.toastApproved') : t('approvals.toastRejected'));
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['kb'] });
       onClose();
       void res;
     },
-    onError: (e) => toast.error(`审批操作失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('approvals.toastActionFailed', { error: errDetail(e) })),
   });
 
   return (
     <DialogContent>
       <DialogHeader>
-        <DialogTitle>{action === 'approve' ? '通过审批' : '拒绝审批'}</DialogTitle>
+        <DialogTitle>{action === 'approve' ? t('approvals.dialogTitleApprove') : t('approvals.dialogTitleReject')}</DialogTitle>
         <DialogDescription>
-          {request.title}（#{request.id}）
-          {action === 'approve' && ' 通过后系统将自动执行发布动作。'}
-          {action === 'reject' && ' 拒绝后变更集将回退为草稿状态。'}
+          {t('approvals.dialogTarget', { title: request.title, id: request.id })}
+          {action === 'approve' && ` ${t('approvals.descApprove')}`}
+          {action === 'reject' && ` ${t('approvals.descReject')}`}
         </DialogDescription>
       </DialogHeader>
       <div>
-        <Label className="mb-1 text-xs">审批意见{action === 'reject' ? '（建议填写）' : '（可选）'}</Label>
+        <Label className="mb-1 text-xs">
+          {t('approvals.commentLabel')}
+          {action === 'reject' ? t('approvals.commentHintReject') : t('approvals.commentHintOptional')}
+        </Label>
         <Textarea
           className="min-h-20 text-xs"
-          placeholder="例如：方案可行，注意发布后观察告警趋势"
+          placeholder={t('approvals.commentPlaceholder')}
           value={comment}
           onChange={(e) => setComment(e.target.value)}
         />
       </div>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>取消</Button>
+        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>{t('approvals.cancel')}</Button>
         <Button
           variant={action === 'approve' ? 'default' : 'destructive'}
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending}
         >
-          {mutation.isPending ? '提交中…' : action === 'approve' ? '确认通过' : '确认拒绝'}
+          {mutation.isPending ? t('approvals.submitting') : action === 'approve' ? t('approvals.confirmApprove') : t('approvals.confirmReject')}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -346,16 +349,17 @@ function DecisionDialog({ request, action, onClose }: {
 }
 
 function ApprovalCard({ request, canDecide, myEmail }: { request: ApprovalRequest; canDecide: boolean; myEmail: string }) {
+  const { t } = useTranslation();
   const [decision, setDecision] = useState<'approve' | 'reject' | null>(null);
   const [contentOpen, setContentOpen] = useState(false);
   const queryClient = useQueryClient();
   const withdrawMutation = useMutation({
     mutationFn: () => consoleApi.decideApproval(request.id, 'withdraw', ''),
     onSuccess: () => {
-      toast.success('审批单已撤回');
+      toast.success(t('approvals.toastWithdrawn'));
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
-    onError: (e) => toast.error(`撤回失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('approvals.toastWithdrawFailed', { error: errDetail(e) })),
   });
 
   const isApplicant = request.applicant === myEmail;
@@ -366,23 +370,23 @@ function ApprovalCard({ request, canDecide, myEmail }: { request: ApprovalReques
     <Card>
       <CardContent className="space-y-2 pt-5">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{BIZ_TYPE_LABEL[request.biz_type] ?? request.biz_type}</Badge>
+          <Badge variant="secondary">
+            {t(`approvals.bizType.${request.biz_type}`, { defaultValue: request.biz_type })}
+          </Badge>
           <span className="text-sm font-semibold">{request.title}</span>
           <StatusBadge status={request.status} className="ml-auto" />
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>申请人：{request.applicant}（{request.applicant_role_label}）</span>
+          <span>{t('approvals.applicant', { applicant: request.applicant, role: request.applicant_role_label })}</span>
           <span className="flex items-center gap-1">
             <Clock className="h-3 w-3" />
             {fmtTime(request.created_at)}
           </span>
-          {request.risk_level && <span>风险等级：{request.risk_level}</span>}
-          <span>
-            进度：{request.current_step}/{request.total_steps} 步
-          </span>
-          <span>单号：#{request.id}</span>
+          {request.risk_level && <span>{t('approvals.riskLevel', { level: request.risk_level })}</span>}
+          <span>{t('approvals.progress', { current: request.current_step, total: request.total_steps })}</span>
+          <span>{t('approvals.requestId', { id: request.id })}</span>
         </div>
-        {request.reason && <p className="text-xs text-muted-foreground">申请理由：{request.reason}</p>}
+        {request.reason && <p className="text-xs text-muted-foreground">{t('approvals.requestReason', { reason: request.reason })}</p>}
 
         <div>
           <Button
@@ -392,7 +396,7 @@ function ApprovalCard({ request, canDecide, myEmail }: { request: ApprovalReques
             onClick={() => setContentOpen((v) => !v)}
           >
             {contentOpen ? <ChevronDown className="mr-1 h-3.5 w-3.5" /> : <ChevronRight className="mr-1 h-3.5 w-3.5" />}
-            {contentOpen ? '收起审批内容' : '查看审批内容与前后对比'}
+            {contentOpen ? t('approvals.collapseContent') : t('approvals.expandContent')}
           </Button>
           {contentOpen && <ApprovalContentSection requestId={request.id} />}
         </div>
@@ -405,24 +409,24 @@ function ApprovalCard({ request, canDecide, myEmail }: { request: ApprovalReques
               <>
                 <Button size="sm" onClick={() => setDecision('approve')}>
                   <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
-                  通过
+                  {t('approvals.approveBtn')}
                 </Button>
                 <Button size="sm" variant="destructive" onClick={() => setDecision('reject')}>
                   <XCircle className="mr-1.5 h-3.5 w-3.5" />
-                  拒绝
+                  {t('approvals.rejectBtn')}
                 </Button>
               </>
             )}
             {canWithdraw && (
               <Button size="sm" variant="outline" onClick={() => withdrawMutation.mutate()} disabled={withdrawMutation.isPending}>
                 <Undo2 className="mr-1.5 h-3.5 w-3.5" />
-                {withdrawMutation.isPending ? '撤回中…' : '撤回申请'}
+                {withdrawMutation.isPending ? t('approvals.withdrawing') : t('approvals.withdrawBtn')}
               </Button>
             )}
           </div>
         )}
         {isApplicant && request.status === 'pending' && (
-          <p className="text-xs text-muted-foreground">你不能审批自己发起的申请。</p>
+          <p className="text-xs text-muted-foreground">{t('approvals.selfApprovalHint')}</p>
         )}
 
         {decision && (
@@ -436,6 +440,7 @@ function ApprovalCard({ request, canDecide, myEmail }: { request: ApprovalReques
 }
 
 function ApprovalListBox({ box, canDecide }: { box: 'pending' | 'created' | 'done'; canDecide: boolean }) {
+  const { t } = useTranslation();
   const { user } = useAuth();
   const myEmail = user?.email || user?.id || '';
   const query = useQuery({
@@ -445,14 +450,14 @@ function ApprovalListBox({ box, canDecide }: { box: 'pending' | 'created' | 'don
 
   if (query.isLoading) return <LoadingBlock rows={4} />;
   if (query.isError) {
-    return <ErrorBlock message={`审批列表加载失败：${errDetail(query.error)}`} onRetry={() => query.refetch()} />;
+    return <ErrorBlock message={t('approvals.listLoadFailed', { error: errDetail(query.error) })} onRetry={() => query.refetch()} />;
   }
   const items = query.data?.items ?? [];
   if (items.length === 0) {
     return (
       <EmptyBlock
-        title={box === 'pending' ? '没有待你审批的请求' : box === 'created' ? '你还没有发起过审批' : '暂无已处理记录'}
-        hint={box === 'pending' ? '新的知识库变更、合并或规则发布请求会出现在这里' : undefined}
+        title={box === 'pending' ? t('approvals.emptyPending') : box === 'created' ? t('approvals.emptyCreated') : t('approvals.emptyDone')}
+        hint={box === 'pending' ? t('approvals.emptyPendingHint') : undefined}
       />
     );
   }
@@ -466,20 +471,21 @@ function ApprovalListBox({ box, canDecide }: { box: 'pending' | 'created' | 'don
 }
 
 export default function ApprovalsPage() {
+  const { t } = useTranslation();
   const perms = usePermissions();
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">审批中心</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t('approvals.title')}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          知识库变更、合并与规则发布的审批流；申请人不能审批自己的申请，通过后系统自动执行发布。
+          {t('approvals.subtitle')}
         </p>
       </div>
       <Tabs defaultValue="pending">
         <TabsList>
-          <TabsTrigger value="pending">待我审批</TabsTrigger>
-          <TabsTrigger value="created">我发起的</TabsTrigger>
-          <TabsTrigger value="done">我已处理</TabsTrigger>
+          <TabsTrigger value="pending">{t('approvals.tabPending')}</TabsTrigger>
+          <TabsTrigger value="created">{t('approvals.tabCreated')}</TabsTrigger>
+          <TabsTrigger value="done">{t('approvals.tabDone')}</TabsTrigger>
         </TabsList>
         <TabsContent value="pending" className="mt-4">
           <ApprovalListBox box="pending" canDecide={!!perms?.can_approve} />

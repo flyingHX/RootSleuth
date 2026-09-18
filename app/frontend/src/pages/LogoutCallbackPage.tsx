@@ -1,7 +1,10 @@
 import React, { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import LoadingSpinner from '../components/LoadingSpinner';
 
 const LogoutCallbackPage: React.FC = () => {
+  const { t } = useTranslation();
+
   useEffect(() => {
     // The OIDC provider has logged out the user and redirected here
     // We can redirect to the home page or show a logout success message
@@ -26,13 +29,9 @@ const LogoutCallbackPage: React.FC = () => {
             <path d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
-          Logout Successful
-        </h2>
-        <p className="text-gray-600 mb-4">
-          You have been successfully logged out.
-        </p>
-        <p className="text-sm text-gray-500">Redirecting to home page...</p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">{t('auth.logoutTitle')}</h2>
+        <p className="text-gray-600 mb-4">{t('auth.logoutDesc')}</p>
+        <p className="text-sm text-gray-500">{t('auth.logoutRedirecting')}</p>
       </div>
     </div>
   );

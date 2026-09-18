@@ -1,5 +1,7 @@
 # RootSleuth 运营控制台运维部署方案手册
 
+[English](OPERATIONS_DEPLOYMENT_GUIDE.en.md) | 简体中文
+
 > 适用范围：整个 RootSleuth 项目——运营控制台 `/workspace/app`（React + Vite 前端 + FastAPI 后端 + Atoms Cloud 托管 PostgreSQL）与 RAG 流水线 `/workspace/aiops-rag-system`（Python，含 Milvus/Kafka/Redis/ES docker-compose），两者独立部署。
 > 项目级文档统一存放于 `/workspace/docs`（本手册所在目录）；目录关系见根目录 `README.md`。
 

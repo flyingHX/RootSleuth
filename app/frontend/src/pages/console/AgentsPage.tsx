@@ -1,6 +1,7 @@
 /** Agent 工作台：深度诊断 / 知识治理 / 值班报告 / 会话轨迹 / CMDB 资产。 */
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Bot, BrainCircuit, ChevronDown, ChevronUp, Database, FileText, History, Search, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -37,26 +38,18 @@ import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 
-const ONCALL_WINDOWS = [
-  { value: '1h', label: '近 1 小时' },
-  { value: '24h', label: '近 24 小时' },
-  { value: '7d', label: '近 7 天' },
-];
+const WINDOW_VALUE_KEYS: Record<string, string> = { '1h': 'h1', '24h': 'h24', '7d': 'd7' };
+const TIME_WINDOWS = ['1h', '24h', '7d'];
+const SESSION_TYPES = ['diagnose', 'kb_governance', 'oncall'];
 
-const SESSION_TYPE_LABEL: Record<string, string> = {
-  diagnose: '深度诊断',
-  kb_governance: '知识治理',
-  oncall: '值班报告',
-};
-
-const GOVERNANCE_WINDOWS = [
-  { value: '1h', label: '近 1 小时' },
-  { value: '24h', label: '近 24 小时' },
-  { value: '7d', label: '近 7 天' },
-];
+/** 中文语境用顿号连接列表，英文语境用逗号。 */
+function listJoin(items: string[], zh: boolean): string {
+  return items.join(zh ? '、' : ', ');
+}
 
 /** 从持久化会话行还原深度诊断结果（进入页面时展示最近一次执行结果）。
- * 后端保存结构：result={"conclusion": {...}, "threshold": n, "quality": {...}, "rag": {...}}，模型/轮次/轨迹在会话列上。 */
+ * 后端保存结构：result={"conclusion": {...}, "threshold": n, "quality": {...}, "rag": {...}}，模型/轮次/轨迹在会话列上。
+ * message 留空，由调用方按当前语言渲染。 */
 function parseDiagnoseSession(session: AgentSession | null | undefined): AgentDiagnoseResult | null {
   if (!session) return null;
   const r = (session.result ?? {}) as Record<string, unknown>;
@@ -66,7 +59,7 @@ function parseDiagnoseSession(session: AgentSession | null | undefined): AgentDi
     status: session.status,
     session_id: session.id,
     event_id: session.event_id ?? 0,
-    message: `最近一次深度诊断结果（会话 #${session.id}）`,
+    message: '',
     agent: {
       model: session.model,
       iterations: session.iterations ?? 0,
@@ -108,27 +101,28 @@ function parseGovernanceSession(session: AgentSession | null | undefined): Agent
 
 /** 工具轨迹渲染：诊断 Agent 的 tool 步骤与治理/值班 Agent 的 step 步骤统一展示。 */
 function TraceSteps({ steps }: { steps: AgentTraceStep[] }) {
+  const { t } = useTranslation();
   if (!steps || steps.length === 0) {
-    return <p className="text-xs text-muted-foreground">无工具轨迹</p>;
+    return <p className="text-xs text-muted-foreground">{t('agents.trace.none')}</p>;
   }
   return (
     <ol className="space-y-2">
       {steps.map((s, i) => {
-        const title = s.tool || s.step || `第 ${s.iteration ?? i + 1} 步`;
+        const title = s.tool || s.step || t('agents.trace.stepN', { n: s.iteration ?? i + 1 });
         const observation = s.observation ?? s.result;
         return (
           <li key={i} className="rounded-md border p-2.5">
             <div className="flex flex-wrap items-center gap-2 text-xs">
               <Badge variant="secondary" className="font-mono">#{i + 1}</Badge>
-              {s.iteration !== undefined && <Badge variant="outline" className="font-mono">轮次 {s.iteration}</Badge>}
+              {s.iteration !== undefined && <Badge variant="outline" className="font-mono">{t('agents.trace.iteration', { n: s.iteration })}</Badge>}
               <span className="font-mono font-medium">{title}</span>
               {s.status && <StatusBadge status={s.status} />}
             </div>
-            {s.thought && <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">思考：{s.thought}</p>}
+            {s.thought && <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{t('agents.trace.thought', { thought: s.thought })}</p>}
             {s.args && Object.keys(s.args).length > 0 && (
               <pre className="log-block mt-1.5 max-h-24 overflow-y-auto text-[11px]">args: {JSON.stringify(s.args, null, 2)}</pre>
             )}
-            {s.error && <p className="mt-1.5 text-xs text-red-600">错误：{s.error}</p>}
+            {s.error && <p className="mt-1.5 text-xs text-red-600">{t('agents.trace.error', { error: s.error })}</p>}
             {s.raw && <p className="mt-1.5 break-all font-mono text-[11px] text-muted-foreground">raw: {s.raw}</p>}
             {observation !== undefined && observation !== null && (
               <pre className="log-block mt-1.5 max-h-32 overflow-y-auto text-[11px]">{JSON.stringify(observation, null, 2)}</pre>
@@ -142,7 +136,8 @@ function TraceSteps({ steps }: { steps: AgentTraceStep[] }) {
 
 /** 证据链列表。 */
 function EvidenceChain({ items }: { items: string[] }) {
-  if (!items || items.length === 0) return <p className="text-xs text-muted-foreground">无</p>;
+  const { t } = useTranslation();
+  if (!items || items.length === 0) return <p className="text-xs text-muted-foreground">{t('agents.none')}</p>;
   return (
     <ul className="space-y-1">
       {items.map((e, i) => (
@@ -158,6 +153,8 @@ function EvidenceChain({ items }: { items: string[] }) {
 // ---------------- 深度诊断 ----------------
 
 function DiagnoseTab() {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
   const perms = usePermissions();
   const queryClient = useQueryClient();
   const [eventId, setEventId] = useState<string>('');
@@ -185,26 +182,32 @@ function DiagnoseTab() {
   const mutation = useMutation({
     mutationFn: () => consoleApi.agentDiagnose(Number(eventId)),
     onSuccess: (res) => {
-      toast.success(res.message || 'Agent 深度诊断完成');
+      toast.success(res.message || t('agents.diagnose.successToast'));
       queryClient.invalidateQueries({ queryKey: ['agent-session-latest'] });
     },
-    onError: (e) => toast.error(`Agent 诊断失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('agents.diagnose.errorToast', { error: errDetail(e) })),
   });
 
   const result = mutation.data ?? latestResult;
+  // 最近一次会话结果的 message 按当前语言渲染（会话号取自 session_id）
+  const resultMessage = mutation.data
+    ? mutation.data.message
+    : latestResult
+      ? t('agents.diagnose.latestMessage', { id: latestResult.session_id })
+      : '';
 
   return (
     <div className="space-y-4">
       {perms?.can_diagnose && (
       <div className="flex flex-wrap items-end gap-2.5">
         <div className="w-72 min-w-56">
-          <Label className="mb-1 text-xs">选择告警事件</Label>
+          <Label className="mb-1 text-xs">{t('agents.diagnose.selectEvent')}</Label>
           <Select value={eventId} onValueChange={setEventId}>
-            <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="选择事件" /></SelectTrigger>
+            <SelectTrigger className="h-9 text-xs"><SelectValue placeholder={t('agents.diagnose.selectPlaceholder')} /></SelectTrigger>
             <SelectContent>
               {events.map((e) => (
                 <SelectItem key={e.id} value={String(e.id)}>
-                  #{e.id} {e.service_name} · {e.error_type || '未分类'}
+                  {t('agents.diagnose.eventOption', { id: e.id, service: e.service_name, errorType: e.error_type || t('agents.diagnose.unclassified') })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -216,78 +219,80 @@ function DiagnoseTab() {
           onClick={() => mutation.mutate()}
         >
           <BrainCircuit className="mr-1.5 h-4 w-4" />
-          {mutation.isPending ? 'Agent 推理中…' : '启动深度诊断'}
+          {mutation.isPending ? t('agents.diagnose.running') : t('agents.diagnose.start')}
         </Button>
       </div>
       )}
-      {eventsQuery.isLoading && <SpinnerLine text="加载告警列表…" />}
+      {eventsQuery.isLoading && <SpinnerLine text={t('agents.diagnose.loadingEvents')} />}
 
       {mutation.isPending && (
-        <SpinnerLine text="Agent 正在多轮取证（告警详情 → CMDB → 日志 → 知识库），通常需要十几秒…" />
+        <SpinnerLine text={t('agents.diagnose.tracing')} />
       )}
 
       {result && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <StatusBadge status={result.status} />
-            {!mutation.data && <Badge variant="secondary">最近一次执行结果</Badge>}
+            {!mutation.data && <Badge variant="secondary">{t('agents.diagnose.latestBadge')}</Badge>}
             {result.agent && (
               <>
                 <Badge variant="outline" className="font-mono">{result.agent.model}</Badge>
-                <Badge variant="outline">{result.agent.iterations} 轮推理</Badge>
+                <Badge variant="outline">{t('agents.diagnose.roundsBadge', { n: result.agent.iterations })}</Badge>
                 <Badge variant="outline">{Math.round(result.agent.duration_ms)} ms</Badge>
-                <Badge variant="outline">{result.agent.tool_trace.length} 次工具调用</Badge>
+                <Badge variant="outline">{t('agents.diagnose.toolCallsBadge', { n: result.agent.tool_trace.length })}</Badge>
                 {result.agent.rag?.kb_search_used && (
-                  <Badge variant="outline">知识库召回 {result.agent.rag.case_count ?? 0} 条案例</Badge>
+                  <Badge variant="outline">{t('agents.diagnose.kbRecallBadge', { n: result.agent.rag.case_count ?? 0 })}</Badge>
                 )}
                 {result.agent.stability && (
                   <Badge variant="outline" className="font-mono text-[10px]">
-                    T={result.agent.stability.temperature ?? 0} · 评估上下文{" "}
-                    {result.agent.stability.eval_context?.merged_count ?? 0} 条 ·{" "}
-                    {(result.agent.stability.context_fingerprint ?? "").slice(0, 8)}
+                    {t('agents.diagnose.stabilityBadge', {
+                      temp: result.agent.stability.temperature ?? 0,
+                      count: result.agent.stability.eval_context?.merged_count ?? 0,
+                      fingerprint: (result.agent.stability.context_fingerprint ?? '').slice(0, 8),
+                    })}
                   </Badge>
                 )}
               </>
             )}
-            <span className="text-muted-foreground">{result.message}</span>
+            <span className="text-muted-foreground">{resultMessage}</span>
           </div>
 
           {result.agent && (
             <>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Agent 结论</CardTitle>
+                  <CardTitle className="text-sm">{t('agents.diagnose.conclusionTitle')}</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
-                  <QualityMetricsCard quality={result.agent.quality} title="Agent 诊断质量评估" />
+                  <QualityMetricsCard quality={result.agent.quality} title={t('agents.diagnose.qualityTitle')} />
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-muted-foreground">置信度</span>
+                    <span className="text-xs text-muted-foreground">{t('agents.diagnose.confidence')}</span>
                     <ConfidenceBadge
                       value={result.agent.conclusion.confidence}
                       low={result.agent.conclusion.low_confidence}
                     />
                     {result.agent.conclusion.low_confidence && (
                       <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">
-                        建议人工复核（阈值 {((result.agent.conclusion.threshold ?? 0.7) * 100).toFixed(0)}%）
+                        {t('agents.diagnose.lowConfidenceBadge', { pct: ((result.agent.conclusion.threshold ?? 0.7) * 100).toFixed(0) })}
                       </Badge>
                     )}
                   </div>
                   <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    口径说明：置信度是模型对本次结论的自评把握度；Trust Index 是证据一致性客观评分（0.4×忠实度 + 0.35×引用覆盖 + 0.25×反幻觉，达标线 85%），二者独立衡量，可出现「置信度高但 Trust Index 低」（结论缺证据支撑）或反之，均需人工关注。
+                    {t('agents.diagnose.metricNote')}
                   </p>
                   <div>
-                    <p className="mb-1 text-xs font-medium text-muted-foreground">根因分析</p>
+                    <p className="mb-1 text-xs font-medium text-muted-foreground">{t('agents.diagnose.rootCause')}</p>
                     <p className="leading-relaxed">{result.agent.conclusion.root_cause}</p>
                   </div>
                   <div>
-                    <p className="mb-1 text-xs font-medium text-muted-foreground">处置建议</p>
+                    <p className="mb-1 text-xs font-medium text-muted-foreground">{t('agents.diagnose.solution')}</p>
                     <p className="leading-relaxed">{result.agent.conclusion.solution}</p>
                   </div>
                   {result.agent.conclusion.command && (
                     <div>
                       <div className="mb-1 flex items-center justify-between">
-                        <p className="text-xs font-medium text-muted-foreground">处置命令</p>
-                        <CopyButton text={result.agent.conclusion.command} label="复制命令" size="xs" />
+                        <p className="text-xs font-medium text-muted-foreground">{t('agents.diagnose.command')}</p>
+                        <CopyButton text={result.agent.conclusion.command} label={t('agents.diagnose.copyCommand')} size="xs" />
                       </div>
                       <pre className="log-block">{result.agent.conclusion.command}</pre>
                     </div>
@@ -297,7 +302,7 @@ function DiagnoseTab() {
 
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">证据链（{result.agent.conclusion.evidence_chain.length} 条）</CardTitle>
+                  <CardTitle className="text-sm">{t('agents.diagnose.evidenceTitle', { count: result.agent.conclusion.evidence_chain.length })}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <EvidenceChain items={result.agent.conclusion.evidence_chain} />
@@ -306,7 +311,7 @@ function DiagnoseTab() {
 
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">工具调用轨迹</CardTitle>
+                  <CardTitle className="text-sm">{t('agents.diagnose.traceTitle')}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <TraceSteps steps={result.agent.tool_trace} />
@@ -323,6 +328,8 @@ function DiagnoseTab() {
 // ---------------- 知识治理 ----------------
 
 function GovernanceTab() {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
   const perms = usePermissions();
   const queryClient = useQueryClient();
   const [timeWindow, setTimeWindow] = useState('24h');
@@ -336,10 +343,10 @@ function GovernanceTab() {
   const mutation = useMutation({
     mutationFn: () => consoleApi.agentKbGovernance(timeWindow),
     onSuccess: (res) => {
-      toast.success(res.message || '知识治理 Agent 运行完成');
+      toast.success(res.message || t('agents.governance.successToast'));
       queryClient.invalidateQueries({ queryKey: ['agent-session-latest'] });
     },
-    onError: (e) => toast.error(`知识治理 Agent 失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('agents.governance.errorToast', { error: errDetail(e) })),
   });
   const g = mutation.data?.governance ?? latestGovernance;
 
@@ -348,51 +355,53 @@ function GovernanceTab() {
       {perms?.can_edit_kb && (
       <div className="flex flex-wrap items-end gap-2.5">
         <div className="w-36">
-          <Label className="mb-1 text-xs">统计时间窗</Label>
+          <Label className="mb-1 text-xs">{t('agents.windowLabel')}</Label>
           <Select value={timeWindow} onValueChange={setTimeWindow}>
             <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{GOVERNANCE_WINDOWS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+            <SelectContent>{TIME_WINDOWS.map((v) => <SelectItem key={v} value={v}>{t(`agents.window.${WINDOW_VALUE_KEYS[v]}`)}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <Button className="h-9" disabled={mutation.isPending || !perms?.can_edit_kb} onClick={() => mutation.mutate()}>
           <Users className="mr-1.5 h-4 w-4" />
-          {mutation.isPending ? 'Agent 治理中…' : '运行知识治理 Agent'}
+          {mutation.isPending ? t('agents.governance.running') : t('agents.governance.run')}
         </Button>
-        <p className="text-xs text-muted-foreground">聚类时间窗内告警簇 → AI 起草案例（走审批）→ 生成合并提案。</p>
+        <p className="text-xs text-muted-foreground">{t('agents.governance.hint')}</p>
       </div>
       )}
 
-      {mutation.isPending && <SpinnerLine text="Agent 正在聚类与起草案例，通常需要十几秒…" />}
+      {mutation.isPending && <SpinnerLine text={t('agents.governance.tracing')} />}
 
       {g && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             {mutation.data ? (
-              <Badge variant="default">本次执行结果</Badge>
+              <Badge variant="default">{t('agents.governance.currentBadge')}</Badge>
             ) : (
               <Badge variant="secondary">
-                最近一次执行结果{latestSession ? `（会话 #${latestSession.id} · ${fmtTime(latestSession.created_at)}）` : ''}
+                {latestSession
+                  ? t('agents.governance.latestBadgeWithSession', { id: latestSession.id, time: fmtTime(latestSession.created_at) })
+                  : t('agents.governance.latestBadge')}
               </Badge>
             )}
-            {g.time_window && <Badge variant="outline">时间窗 {g.time_window}</Badge>}
+            {g.time_window && <Badge variant="outline">{t('agents.governance.timeWindowBadge', { w: g.time_window })}</Badge>}
           </div>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">簇分析</CardTitle>
+              <CardTitle className="text-sm">{t('agents.governance.clusterTitle')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm leading-relaxed">{g.analysis}</p>
               {g.clusters.length === 0 ? (
-                <p className="text-xs text-muted-foreground">当前无待治理告警簇。</p>
+                <p className="text-xs text-muted-foreground">{t('agents.governance.noClusters')}</p>
               ) : (
                 <div className="overflow-hidden rounded-md border text-xs">
                   <table className="w-full table-fixed">
                     <thead>
                       <tr className="border-b bg-muted/60 text-left text-muted-foreground">
-                        <th className="w-12 px-3 py-2 font-medium">告警数</th>
-                        <th className="px-3 py-2 font-medium">告警模板</th>
-                        <th className="w-40 px-3 py-2 font-medium">涉及服务</th>
-                        <th className="w-20 px-3 py-2 font-medium">最高级别</th>
+                        <th className="w-12 px-3 py-2 font-medium">{t('agents.governance.thAlerts')}</th>
+                        <th className="px-3 py-2 font-medium">{t('agents.governance.thTemplate')}</th>
+                        <th className="w-40 px-3 py-2 font-medium">{t('agents.governance.thServices')}</th>
+                        <th className="w-20 px-3 py-2 font-medium">{t('agents.governance.thSeverity')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -400,7 +409,7 @@ function GovernanceTab() {
                         <tr key={i} className="border-b last:border-b-0">
                           <td className="px-3 py-2 font-mono font-medium">{c.count}</td>
                           <td className="px-3 py-2 break-all">{c.template}</td>
-                          <td className="px-3 py-2 truncate" title={c.services.join('、')}>{c.services.join('、')}</td>
+                          <td className="px-3 py-2 truncate" title={listJoin(c.services, zh)}>{listJoin(c.services, zh)}</td>
                           <td className="px-3 py-2"><SeverityBadge severity={c.max_severity} /></td>
                         </tr>
                       ))}
@@ -411,27 +420,27 @@ function GovernanceTab() {
             </CardContent>
           </Card>
 
-          <QualityMetricsCard quality={g.quality} title="本次起草质量评估（Trust Index 口径）" />
+          <QualityMetricsCard quality={g.quality} title={t('agents.governance.qualityTitle')} />
 
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">已提交案例（{g.drafts_submitted.length}）</CardTitle>
+                <CardTitle className="text-sm">{t('agents.governance.submittedTitle', { count: g.drafts_submitted.length })}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {g.drafts_submitted.length === 0 && <p className="text-xs text-muted-foreground">本次无新增（可能已存在同名案例或变更集在途）。</p>}
+                {g.drafts_submitted.length === 0 && <p className="text-xs text-muted-foreground">{t('agents.governance.noSubmitted')}</p>}
                 {g.drafts_submitted.map((d, i) => (
                   <div key={i} className="rounded-md border p-2.5 text-xs">
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-medium">{d.case_id}</span>
-                      {d.auto_published && <Badge variant="outline">免审直发</Badge>}
-                      {d.approval_request_id && <Badge variant="outline">审批单 #{d.approval_request_id}</Badge>}
+                      {d.auto_published && <Badge variant="outline">{t('agents.governance.autoPublishedBadge')}</Badge>}
+                      {d.approval_request_id && <Badge variant="outline">{t('agents.governance.approvalBadge', { id: d.approval_request_id })}</Badge>}
                     </div>
                     <p className="mt-1 truncate text-muted-foreground" title={d.alert_template ?? ''}>{d.alert_template}</p>
                     {d.quality?.trust_index != null && (
                       <p className="mt-1 text-muted-foreground">
-                        单条质量：Trust Index {(d.quality.trust_index * 100).toFixed(1)}%
-                        {d.quality.quality_ok === false && <span className="text-amber-700">（未达 85% 达标线）</span>}
+                        {t('agents.governance.singleQuality', { pct: (d.quality.trust_index * 100).toFixed(1) })}
+                        {d.quality.quality_ok === false && <span className="text-amber-700">{t('agents.governance.belowGate')}</span>}
                       </p>
                     )}
                   </div>
@@ -440,17 +449,17 @@ function GovernanceTab() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm">跳过/失败（{g.drafts_skipped.length}）</CardTitle>
+                <CardTitle className="text-sm">{t('agents.governance.skippedTitle', { count: g.drafts_skipped.length })}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {g.drafts_skipped.length === 0 && <p className="text-xs text-muted-foreground">无跳过项。</p>}
+                {g.drafts_skipped.length === 0 && <p className="text-xs text-muted-foreground">{t('agents.governance.noSkipped')}</p>}
                 {g.drafts_skipped.map((d, i) => (
                   <div key={i} className="rounded-md border p-2.5 text-xs">
                     <p className="truncate" title={d.alert_template ?? ''}>{d.alert_template}</p>
                     <p className="mt-1 text-amber-700">{d.reason}</p>
                     {d.quality?.trust_index != null && (
                       <p className="mt-1 text-muted-foreground">
-                        单条质量：Trust Index {(d.quality.trust_index * 100).toFixed(1)}%
+                        {t('agents.governance.singleQuality', { pct: (d.quality.trust_index * 100).toFixed(1) })}
                       </p>
                     )}
                   </div>
@@ -461,7 +470,7 @@ function GovernanceTab() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">合并提案结果</CardTitle>
+              <CardTitle className="text-sm">{t('agents.governance.mergeResultTitle')}</CardTitle>
             </CardHeader>
             <CardContent>
               <JsonPre data={g.merge_result} />
@@ -476,6 +485,8 @@ function GovernanceTab() {
 // ---------------- 值班报告 ----------------
 
 function OncallTab() {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
   const perms = usePermissions();
   const queryClient = useQueryClient();
   const [window, setWindow] = useState('24h');
@@ -483,10 +494,10 @@ function OncallTab() {
   const mutation = useMutation({
     mutationFn: () => consoleApi.agentOncallReport(window),
     onSuccess: (res) => {
-      toast.success(res.message || '值班报告已生成');
+      toast.success(res.message || t('agents.oncall.successToast'));
       queryClient.invalidateQueries({ queryKey: ['agent-oncall-reports'] });
     },
-    onError: (e) => toast.error(`值班 Agent 失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('agents.oncall.errorToast', { error: errDetail(e) })),
   });
   const r = mutation.data?.report;
 
@@ -501,79 +512,79 @@ function OncallTab() {
       {perms?.can_diagnose && (
       <div className="flex flex-wrap items-end gap-2.5">
         <div className="w-36">
-          <Label className="mb-1 text-xs">统计时间窗</Label>
+          <Label className="mb-1 text-xs">{t('agents.windowLabel')}</Label>
           <Select value={window} onValueChange={setWindow}>
             <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{ONCALL_WINDOWS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+            <SelectContent>{TIME_WINDOWS.map((v) => <SelectItem key={v} value={v}>{t(`agents.window.${WINDOW_VALUE_KEYS[v]}`)}</SelectItem>)}</SelectContent>
           </Select>
         </div>
         <Button className="h-9" disabled={mutation.isPending || !perms?.can_diagnose} onClick={() => mutation.mutate()}>
           <FileText className="mr-1.5 h-4 w-4" />
-          {mutation.isPending ? 'Agent 汇总中…' : '生成值班报告'}
+          {mutation.isPending ? t('agents.oncall.running') : t('agents.oncall.run')}
         </Button>
       </div>
       )}
 
-      {mutation.isPending && <SpinnerLine text="Agent 正在统计时间窗影响面并撰写 ChatOps 建议…" />}
+      {mutation.isPending && <SpinnerLine text={t('agents.oncall.tracing')} />}
 
       {r && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <Badge variant="outline" className="border-red-500/40 bg-red-500/10 font-semibold text-red-600">{r.priority}</Badge>
-            <Badge variant="outline">{r.time_window} 窗口</Badge>
-            <Badge variant="outline">告警 {r.event_count} 条</Badge>
+            <Badge variant="outline">{t('agents.oncall.windowBadge', { w: r.time_window })}</Badge>
+            <Badge variant="outline">{t('agents.oncall.alertsBadge', { count: r.event_count })}</Badge>
             {Object.entries(r.by_severity).map(([k, v]) => (
               <span key={k} className="inline-flex items-center gap-1">
                 <SeverityBadge severity={k} />×{v}
               </span>
             ))}
             {mutation.data?.status === 'degraded' && (
-              <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">AI 失败，确定性降级报告</Badge>
+              <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">{t('agents.oncall.degradedBadge')}</Badge>
             )}
           </div>
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">影响面摘要</CardTitle>
+              <CardTitle className="text-sm">{t('agents.oncall.impactTitle')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <p className="text-sm leading-relaxed">{r.impact_summary}</p>
               <div>
-                <p className="mb-1.5 text-xs font-medium text-muted-foreground">处置动作</p>
+                <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('agents.oncall.actions')}</p>
                 <ol className="list-decimal space-y-1 pl-5 text-sm">
-                  {r.actions.length === 0 && <li className="list-none text-xs text-muted-foreground">无</li>}
+                  {r.actions.length === 0 && <li className="list-none text-xs text-muted-foreground">{t('agents.none')}</li>}
                   {r.actions.map((a, i) => <li key={i}>{a}</li>)}
                 </ol>
               </div>
               <div>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">需通知负责人</p>
+                <p className="mb-1 text-xs font-medium text-muted-foreground">{t('agents.oncall.owners')}</p>
                 <div className="flex flex-wrap gap-1.5">
-                  {r.owners_to_notify.length === 0 && <span className="text-xs text-muted-foreground">无</span>}
+                  {r.owners_to_notify.length === 0 && <span className="text-xs text-muted-foreground">{t('agents.none')}</span>}
                   {r.owners_to_notify.map((o) => <Badge key={o} variant="secondary">{o}</Badge>)}
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {r.quality && <QualityMetricsCard quality={r.quality} title="报告质量评估（Trust Index 口径）" />}
+          {r.quality && <QualityMetricsCard quality={r.quality} title={t('agents.oncall.qualityTitle')} />}
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">CMDB 影响面（{r.affected_systems.length} 个系统）</CardTitle>
+              <CardTitle className="text-sm">{t('agents.oncall.cmdbTitle', { count: r.affected_systems.length })}</CardTitle>
             </CardHeader>
             <CardContent>
               {r.affected_systems.length === 0 ? (
-                <p className="text-xs text-muted-foreground">窗口内告警未映射到 CMDB 系统。</p>
+                <p className="text-xs text-muted-foreground">{t('agents.oncall.noCmdb')}</p>
               ) : (
                 <div className="overflow-hidden rounded-md border text-xs">
                   <table className="w-full table-fixed">
                     <thead>
                       <tr className="border-b bg-muted/60 text-left text-muted-foreground">
-                        <th className="w-36 px-3 py-2 font-medium">系统</th>
-                        <th className="w-16 px-3 py-2 font-medium">告警数</th>
-                        <th className="w-24 px-3 py-2 font-medium">最高级别</th>
-                        <th className="w-36 px-3 py-2 font-medium">负责人</th>
-                        <th className="px-3 py-2 font-medium">涉及服务</th>
+                        <th className="w-36 px-3 py-2 font-medium">{t('agents.oncall.thSystem')}</th>
+                        <th className="w-16 px-3 py-2 font-medium">{t('agents.oncall.thAlerts')}</th>
+                        <th className="w-24 px-3 py-2 font-medium">{t('agents.oncall.thSeverity')}</th>
+                        <th className="w-36 px-3 py-2 font-medium">{t('agents.oncall.thOwners')}</th>
+                        <th className="px-3 py-2 font-medium">{t('agents.oncall.thServices')}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -582,9 +593,9 @@ function OncallTab() {
                           <td className="px-3 py-2 font-medium">{s.system}</td>
                           <td className="px-3 py-2 font-mono">{s.event_count}</td>
                           <td className="px-3 py-2"><SeverityBadge severity={s.max_severity} /></td>
-                          <td className="px-3 py-2 truncate" title={s.owners.join('、')}>{s.owners.join('、') || '—'}</td>
-                          <td className="px-3 py-2 truncate" title={s.services.map((x) => x.service).join('、')}>
-                            {s.services.map((x) => x.service).join('、')}
+                          <td className="px-3 py-2 truncate" title={listJoin(s.owners, zh)}>{listJoin(s.owners, zh) || '—'}</td>
+                          <td className="px-3 py-2 truncate" title={listJoin(s.services.map((x) => x.service), zh)}>
+                            {listJoin(s.services.map((x) => x.service), zh)}
                           </td>
                         </tr>
                       ))}
@@ -594,7 +605,7 @@ function OncallTab() {
               )}
               {Object.keys(r.unmapped_services ?? {}).length > 0 && (
                 <p className="mt-2 text-xs text-amber-700">
-                  未映射 CMDB 的服务：{Object.entries(r.unmapped_services).map(([k, v]) => `${k}(${v})`).join('、')}
+                  {t('agents.oncall.unmappedServices', { list: listJoin(Object.entries(r.unmapped_services).map(([k, v]) => `${k}(${v})`), zh) })}
                 </p>
               )}
             </CardContent>
@@ -602,11 +613,11 @@ function OncallTab() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm">ChatOps 处置建议</CardTitle>
+              <CardTitle className="text-sm">{t('agents.oncall.chatopsTitle')}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="mb-2 flex justify-end">
-                <CopyButton text={r.chatops_text} label="复制 ChatOps 文本" size="xs" />
+                <CopyButton text={r.chatops_text} label={t('agents.oncall.copyChatops')} size="xs" />
               </div>
               <pre className="log-block max-h-72 overflow-y-auto whitespace-pre-wrap">{r.chatops_text}</pre>
             </CardContent>
@@ -618,7 +629,7 @@ function OncallTab() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">历史报告（{history.length}）</CardTitle>
+          <CardTitle className="text-sm">{t('agents.oncall.historyTitle', { count: history.length })}</CardTitle>
         </CardHeader>
         <CardContent>
           <StateGate
@@ -626,7 +637,7 @@ function OncallTab() {
             error={historyQuery.isError ? errDetail(historyQuery.error) : null}
             onRetry={() => historyQuery.refetch()}
             isEmpty={history.length === 0}
-            empty="暂无历史报告"
+            empty={t('agents.oncall.noHistory')}
           >
             <div className="space-y-2">
               {history.map((h) => {
@@ -642,7 +653,7 @@ function OncallTab() {
                     >
                       <span className="font-mono font-medium">#{h.id}</span>
                       <Badge variant="outline">{h.time_window}</Badge>
-                      <span className="text-muted-foreground">{h.event_count} 条告警（严重 {h.critical_count} / 警告 {h.warning_count}）</span>
+                      <span className="text-muted-foreground">{t('agents.oncall.historyAlerts', { count: h.event_count, critical: h.critical_count, warning: h.warning_count })}</span>
                       {rep?.priority && (
                         <Badge variant="outline" className="border-red-500/40 bg-red-500/10 font-semibold text-red-600">{rep.priority}</Badge>
                       )}
@@ -654,42 +665,42 @@ function OncallTab() {
                         {rep ? (
                           <>
                             <div>
-                              <p className="mb-1 font-medium text-muted-foreground">影响面摘要</p>
+                              <p className="mb-1 font-medium text-muted-foreground">{t('agents.oncall.impactTitle')}</p>
                               <p className="leading-relaxed">{rep.impact_summary}</p>
                             </div>
                             <div>
-                              <p className="mb-1 font-medium text-muted-foreground">处置动作</p>
+                              <p className="mb-1 font-medium text-muted-foreground">{t('agents.oncall.actions')}</p>
                               <ol className="list-decimal space-y-1 pl-5">
-                                {rep.actions.length === 0 && <li className="list-none text-muted-foreground">无</li>}
+                                {rep.actions.length === 0 && <li className="list-none text-muted-foreground">{t('agents.none')}</li>}
                                 {rep.actions.map((a, i) => <li key={i}>{a}</li>)}
                               </ol>
                             </div>
                             <div>
-                              <p className="mb-1 font-medium text-muted-foreground">需通知负责人</p>
+                              <p className="mb-1 font-medium text-muted-foreground">{t('agents.oncall.owners')}</p>
                               <div className="flex flex-wrap gap-1.5">
-                                {rep.owners_to_notify.length === 0 && <span className="text-muted-foreground">无</span>}
+                                {rep.owners_to_notify.length === 0 && <span className="text-muted-foreground">{t('agents.none')}</span>}
                                 {rep.owners_to_notify.map((o) => <Badge key={o} variant="secondary">{o}</Badge>)}
                               </div>
                             </div>
-                            {rep.quality && <QualityMetricsCard quality={rep.quality} title="报告质量评估" />}
+                            {rep.quality && <QualityMetricsCard quality={rep.quality} title={t('agents.oncall.qualityTitleShort')} />}
                           </>
                         ) : (
-                          <p className="text-muted-foreground">该报告缺少结构化详情（仅保留摘要统计）。</p>
+                          <p className="text-muted-foreground">{t('agents.oncall.noStructuredDetail')}</p>
                         )}
                         <div>
-                          <p className="mb-1 font-medium text-muted-foreground">CMDB 影响面（{systems.length} 个系统）</p>
+                          <p className="mb-1 font-medium text-muted-foreground">{t('agents.oncall.cmdbTitle', { count: systems.length })}</p>
                           {systems.length === 0 ? (
-                            <p className="text-muted-foreground">窗口内告警未映射到 CMDB 系统。</p>
+                            <p className="text-muted-foreground">{t('agents.oncall.noCmdb')}</p>
                           ) : (
                             <div className="overflow-hidden rounded-md border">
                               <table className="w-full table-fixed">
                                 <thead>
                                   <tr className="border-b bg-muted/60 text-left text-muted-foreground">
-                                    <th className="w-36 px-3 py-1.5 font-medium">系统</th>
-                                    <th className="w-16 px-3 py-1.5 font-medium">告警数</th>
-                                    <th className="w-24 px-3 py-1.5 font-medium">最高级别</th>
-                                    <th className="w-36 px-3 py-1.5 font-medium">负责人</th>
-                                    <th className="px-3 py-1.5 font-medium">涉及服务</th>
+                                    <th className="w-36 px-3 py-1.5 font-medium">{t('agents.oncall.thSystem')}</th>
+                                    <th className="w-16 px-3 py-1.5 font-medium">{t('agents.oncall.thAlerts')}</th>
+                                    <th className="w-24 px-3 py-1.5 font-medium">{t('agents.oncall.thSeverity')}</th>
+                                    <th className="w-36 px-3 py-1.5 font-medium">{t('agents.oncall.thOwners')}</th>
+                                    <th className="px-3 py-1.5 font-medium">{t('agents.oncall.thServices')}</th>
                                   </tr>
                                 </thead>
                                 <tbody>
@@ -698,9 +709,9 @@ function OncallTab() {
                                       <td className="px-3 py-1.5 font-medium">{s.system}</td>
                                       <td className="px-3 py-1.5 font-mono">{s.event_count}</td>
                                       <td className="px-3 py-1.5"><SeverityBadge severity={s.max_severity} /></td>
-                                      <td className="px-3 py-1.5 truncate" title={s.owners.join('、')}>{s.owners.join('、') || '—'}</td>
-                                      <td className="px-3 py-1.5 truncate" title={s.services.map((x) => x.service).join('、')}>
-                                        {s.services.map((x) => x.service).join('、')}
+                                      <td className="px-3 py-1.5 truncate" title={listJoin(s.owners, zh)}>{listJoin(s.owners, zh) || '—'}</td>
+                                      <td className="px-3 py-1.5 truncate" title={listJoin(s.services.map((x) => x.service), zh)}>
+                                        {listJoin(s.services.map((x) => x.service), zh)}
                                       </td>
                                     </tr>
                                   ))}
@@ -711,13 +722,13 @@ function OncallTab() {
                         </div>
                         <div>
                           <div className="mb-1 flex items-center justify-between">
-                            <p className="font-medium text-muted-foreground">ChatOps 文本</p>
-                            {chatops && <CopyButton text={chatops} label="复制文本" size="xs" />}
+                            <p className="font-medium text-muted-foreground">{t('agents.oncall.chatopsText')}</p>
+                            {chatops && <CopyButton text={chatops} label={t('agents.oncall.copyText')} size="xs" />}
                           </div>
                           {chatops ? (
                             <pre className="log-block max-h-60 overflow-y-auto whitespace-pre-wrap">{chatops}</pre>
                           ) : (
-                            <p className="text-muted-foreground">无</p>
+                            <p className="text-muted-foreground">{t('agents.none')}</p>
                           )}
                         </div>
                       </div>
@@ -736,6 +747,7 @@ function OncallTab() {
 // ---------------- 会话轨迹 ----------------
 
 function SessionsTab() {
+  const { t } = useTranslation();
   const [sessionType, setSessionType] = useState('all');
   const [expanded, setExpanded] = useState<number | null>(null);
 
@@ -752,13 +764,13 @@ function SessionsTab() {
   return (
     <div className="space-y-3">
       <div className="w-36">
-        <Label className="mb-1 text-xs">会话类型</Label>
+        <Label className="mb-1 text-xs">{t('agents.sessions.typeLabel')}</Label>
         <Select value={sessionType} onValueChange={setSessionType}>
           <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部类型</SelectItem>
-            {Object.entries(SESSION_TYPE_LABEL).map(([v, label]) => (
-              <SelectItem key={v} value={v}>{label}</SelectItem>
+            <SelectItem value="all">{t('agents.sessionType.all')}</SelectItem>
+            {SESSION_TYPES.map((v) => (
+              <SelectItem key={v} value={v}>{t(`agents.sessionType.${v}`)}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -769,8 +781,8 @@ function SessionsTab() {
         error={query.isError ? errDetail(query.error) : null}
         onRetry={() => query.refetch()}
         isEmpty={sessions.length === 0}
-        empty="暂无 Agent 会话"
-        emptyHint="运行任一 Agent 后，这里会记录完整工具轨迹与结果"
+        empty={t('agents.sessions.empty')}
+        emptyHint={t('agents.sessions.emptyHint')}
       >
         <div className="space-y-2">
           {sessions.map((s: AgentSession) => (
@@ -780,24 +792,24 @@ function SessionsTab() {
                 onClick={() => setExpanded(expanded === s.id ? null : s.id)}
               >
                 <span className="font-mono font-medium">#{s.id}</span>
-                <Badge variant="secondary">{SESSION_TYPE_LABEL[s.session_type] ?? s.session_type}</Badge>
+                <Badge variant="secondary">{t(`agents.sessionType.${s.session_type}`, { defaultValue: s.session_type })}</Badge>
                 <StatusBadge status={s.status} />
-                {s.event_id && <span className="text-muted-foreground">事件 #{s.event_id}</span>}
+                {s.event_id && <span className="text-muted-foreground">{t('agents.sessions.eventRef', { id: s.event_id })}</span>}
                 <span className="font-mono text-muted-foreground">{s.model}</span>
-                {s.iterations !== null && <Badge variant="outline">{s.iterations} 轮</Badge>}
+                {s.iterations !== null && <Badge variant="outline">{t('agents.sessions.rounds', { n: s.iterations })}</Badge>}
                 {s.duration_ms !== null && <span className="text-muted-foreground">{Math.round(s.duration_ms)} ms</span>}
                 <span className="ml-auto text-muted-foreground">{s.actor} · {fmtTime(s.created_at)}</span>
               </button>
               {expanded === s.id && (
                 <div className="space-y-3 border-t px-3 py-3">
                   {s.summary && <p className="text-xs leading-relaxed">{s.summary}</p>}
-                  {s.error_message && <p className="text-xs text-red-600">错误：{s.error_message}</p>}
+                  {s.error_message && <p className="text-xs text-red-600">{t('agents.trace.error', { error: s.error_message })}</p>}
                   <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">执行轨迹</p>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('agents.sessions.traceTitle')}</p>
                     <TraceSteps steps={s.tool_trace ?? []} />
                   </div>
                   <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">结构化结果</p>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('agents.sessions.resultTitle')}</p>
                     <JsonPre data={s.result} />
                   </div>
                 </div>
@@ -813,11 +825,12 @@ function SessionsTab() {
 // ---------------- CMDB 资产 ----------------
 
 function CmdbTab() {
+  const { t } = useTranslation();
   const [q, setQ] = useState('');
   const [input, setInput] = useState('');
   useEffect(() => {
-    const t = setTimeout(() => setQ(input.trim()), 300);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setQ(input.trim()), 300);
+    return () => clearTimeout(timer);
   }, [input]);
 
   const query = useQuery({
@@ -832,7 +845,7 @@ function CmdbTab() {
         <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
           className="h-9 pl-8 text-xs"
-          placeholder="搜索主机 / IP / 服务 / 系统"
+          placeholder={t('agents.cmdb.searchPlaceholder')}
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
@@ -843,20 +856,20 @@ function CmdbTab() {
         error={query.isError ? errDetail(query.error) : null}
         onRetry={() => query.refetch()}
         isEmpty={assets.length === 0}
-        empty="没有匹配的 CMDB 资产"
+        empty={t('agents.cmdb.empty')}
       >
         <div className="overflow-x-auto rounded-md border text-xs">
           <table className="w-full min-w-[860px] table-fixed">
             <thead>
               <tr className="border-b bg-muted/60 text-left text-muted-foreground">
-                <th className="w-36 px-3 py-2 font-medium">主机名</th>
+                <th className="w-36 px-3 py-2 font-medium">{t('agents.cmdb.thHostname')}</th>
                 <th className="w-32 px-3 py-2 font-medium">IP</th>
-                <th className="w-36 px-3 py-2 font-medium">所属系统</th>
-                <th className="w-36 px-3 py-2 font-medium">服务</th>
-                <th className="w-24 px-3 py-2 font-medium">集群</th>
-                <th className="w-20 px-3 py-2 font-medium">环境</th>
-                <th className="w-24 px-3 py-2 font-medium">负责人</th>
-                <th className="px-3 py-2 font-medium">依赖 / 日志路径</th>
+                <th className="w-36 px-3 py-2 font-medium">{t('agents.cmdb.thSystem')}</th>
+                <th className="w-36 px-3 py-2 font-medium">{t('agents.cmdb.thService')}</th>
+                <th className="w-24 px-3 py-2 font-medium">{t('agents.cmdb.thCluster')}</th>
+                <th className="w-20 px-3 py-2 font-medium">{t('agents.cmdb.thEnv')}</th>
+                <th className="w-24 px-3 py-2 font-medium">{t('agents.cmdb.thOwner')}</th>
+                <th className="px-3 py-2 font-medium">{t('agents.cmdb.thDeps')}</th>
               </tr>
             </thead>
             <tbody>
@@ -886,25 +899,26 @@ function CmdbTab() {
 // ---------------- 页面 ----------------
 
 export default function AgentsPage() {
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
       <div>
         <h1 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
           <Bot className="h-5 w-5" />
-          Agent 工作台
+          {t('agents.page.title')}
         </h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          三类运维 Agent：深度诊断（多轮工具推理）、知识治理（聚类起草走审批）、值班报告（影响面 + ChatOps 建议）。
+          {t('agents.page.subtitle')}
         </p>
       </div>
 
       <Tabs defaultValue="diagnose">
         <TabsList>
-          <TabsTrigger value="diagnose" className="gap-1.5"><BrainCircuit className="h-3.5 w-3.5" />深度诊断</TabsTrigger>
-          <TabsTrigger value="governance" className="gap-1.5"><Users className="h-3.5 w-3.5" />知识治理</TabsTrigger>
-          <TabsTrigger value="oncall" className="gap-1.5"><FileText className="h-3.5 w-3.5" />值班报告</TabsTrigger>
-          <TabsTrigger value="sessions" className="gap-1.5"><History className="h-3.5 w-3.5" />会话轨迹</TabsTrigger>
-          <TabsTrigger value="cmdb" className="gap-1.5"><Database className="h-3.5 w-3.5" />CMDB</TabsTrigger>
+          <TabsTrigger value="diagnose" className="gap-1.5"><BrainCircuit className="h-3.5 w-3.5" />{t('agents.page.tabDiagnose')}</TabsTrigger>
+          <TabsTrigger value="governance" className="gap-1.5"><Users className="h-3.5 w-3.5" />{t('agents.page.tabGovernance')}</TabsTrigger>
+          <TabsTrigger value="oncall" className="gap-1.5"><FileText className="h-3.5 w-3.5" />{t('agents.page.tabOncall')}</TabsTrigger>
+          <TabsTrigger value="sessions" className="gap-1.5"><History className="h-3.5 w-3.5" />{t('agents.page.tabSessions')}</TabsTrigger>
+          <TabsTrigger value="cmdb" className="gap-1.5"><Database className="h-3.5 w-3.5" />{t('agents.page.tabCmdb')}</TabsTrigger>
         </TabsList>
         <TabsContent value="diagnose" className="mt-4"><DiagnoseTab /></TabsContent>
         <TabsContent value="governance" className="mt-4"><GovernanceTab /></TabsContent>

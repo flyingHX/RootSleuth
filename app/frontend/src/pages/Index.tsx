@@ -1,6 +1,7 @@
-/** C3 运营总览：核心指标、告警分布、TOP 榜、依赖健康与待办。 */
+/** C3 运营总览：核心指标、告警分布、TOP 榜、依赖健康与待办。文案经 i18n 双语渲染。 */
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowRight, BellRing, BookOpenText, ClipboardCheck, HeartPulse } from 'lucide-react';
 import { consoleApi, errDetail, type DashboardData } from '@/lib/console-api';
 import { ErrorBlock, SeverityBadge, StateGate, fmtPercent, fmtTime } from '@/components/console/shared';
@@ -8,23 +9,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 
-const HEALTH_LABEL: Record<string, string> = {
-  milvus: 'Milvus 向量检索',
-  redis: 'Redis 去重聚合',
-  elasticsearch: 'Elasticsearch 冷存储',
-  llm: 'LLM 诊断',
-};
-
 function MetricStrip({ metrics }: { metrics: NonNullable<ReturnType<typeof useDashboardQuery>['data']>['metrics'] }) {
+  const { t } = useTranslation();
   const items = [
-    { label: '告警总量（近 7 天）', value: String(metrics.total_events), hint: '标准化后事件数' },
-    { label: '降噪率', value: fmtPercent(metrics.noise_reduction), hint: '指纹去重合并比例' },
-    { label: '未知率', value: fmtPercent(metrics.unknown_rate), hint: '无相似案例召回占比' },
-    { label: 'RAG 成功率', value: fmtPercent(metrics.rag_success_rate), hint: '召回 + 诊断成功' },
+    { label: t('index.metrics.totalEvents'), value: String(metrics.total_events), hint: t('index.metrics.totalEventsHint') },
+    { label: t('index.metrics.noiseReduction'), value: fmtPercent(metrics.noise_reduction), hint: t('index.metrics.noiseReductionHint') },
+    { label: t('index.metrics.unknownRate'), value: fmtPercent(metrics.unknown_rate), hint: t('index.metrics.unknownRateHint') },
+    { label: t('index.metrics.ragSuccessRate'), value: fmtPercent(metrics.rag_success_rate), hint: t('index.metrics.ragSuccessRateHint') },
     {
-      label: 'RAG P99',
+      label: t('index.metrics.ragP99'),
       value: metrics.rag_p99_ms !== null ? `${metrics.rag_p99_ms.toFixed(0)} ms` : '—',
-      hint: `平均 ${metrics.avg_rag_ms !== null ? metrics.avg_rag_ms.toFixed(0) : '—'} ms`,
+      hint: t('index.metrics.p99AvgHint', { avg: metrics.avg_rag_ms !== null ? metrics.avg_rag_ms.toFixed(0) : '—' }),
     },
   ];
   return (
@@ -51,42 +46,48 @@ function MetricStrip({ metrics }: { metrics: NonNullable<ReturnType<typeof useDa
 
 /** 诊断质量态势：Trust Index、质量达标率、幻觉率、生成/检索成功率与内容安全（投毒拦截）统计。 */
 function QualityStrip({ quality }: { quality: DashboardData['quality'] }) {
+  const { t } = useTranslation();
   const items = [
     {
-      label: 'Trust Index',
+      label: t('quality.trustIndex'),
       value: quality.trust_index_avg !== null ? fmtPercent(quality.trust_index_avg) : '—',
-      hint: `近 ${quality.sample_count} 次诊断样本`,
+      hint: t('index.quality.sampleHint', { count: quality.sample_count }),
     },
     {
-      label: '质量达标率',
+      label: t('index.quality.okRate'),
       value: quality.quality_ok_rate !== null ? fmtPercent(quality.quality_ok_rate) : '—',
-      hint: '五项质量指标全达标占比',
+      hint: t('index.quality.okRateHint'),
     },
     {
-      label: '幻觉率',
+      label: t('quality.hallucinationRate'),
       value: quality.hallucination_rate_avg !== null ? fmtPercent(quality.hallucination_rate_avg) : '—',
-      hint: '诊断结论幻觉占比（越低越好）',
+      hint: t('index.quality.hallucinationHint'),
     },
     {
-      label: '生成成功率',
+      label: t('index.quality.generationSuccessRate'),
       value: quality.generation.success_rate !== null ? fmtPercent(quality.generation.success_rate) : '—',
-      hint: `LLM 成功 ${quality.generation.success} / 失败 ${quality.generation.fail}`,
+      hint: t('index.quality.generationHint', { success: quality.generation.success, fail: quality.generation.fail }),
     },
     {
-      label: '检索成功率',
+      label: t('index.quality.retrievalSuccessRate'),
       value: quality.retrieval.success_rate !== null ? fmtPercent(quality.retrieval.success_rate) : '—',
-      hint: `P99 ${quality.retrieval.p99_ms !== null ? `${quality.retrieval.p99_ms.toFixed(0)} ms` : '—'}`,
+      hint: t('index.quality.retrievalP99Hint', {
+        ms: quality.retrieval.p99_ms !== null ? `${quality.retrieval.p99_ms.toFixed(0)} ms` : '—',
+      }),
     },
     {
-      label: '投毒拦截',
+      label: t('index.quality.poisonBlocked'),
       value: String(quality.content_safety.blocked),
-      hint: `内容扫描 ${quality.content_safety.scans} 次 · 误报申诉放行 ${quality.content_safety.overrides}`,
+      hint: t('index.quality.poisonHint', {
+        scans: quality.content_safety.scans,
+        overrides: quality.content_safety.overrides,
+      }),
     },
   ];
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">诊断质量态势</CardTitle>
+        <CardTitle className="text-base">{t('index.quality.title')}</CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-y-5 px-6 py-5 sm:grid-cols-3 lg:grid-cols-6">
         {items.map((item, idx) => (
@@ -145,6 +146,7 @@ function useDashboardQuery() {
 }
 
 export default function Index() {
+  const { t } = useTranslation();
   const { data, isLoading, isError, error, refetch } = useDashboardQuery();
 
   if (isLoading) {
@@ -159,7 +161,7 @@ export default function Index() {
     );
   }
   if (isError || !data) {
-    return <ErrorBlock message={`Dashboard 加载失败：${errDetail(error)}`} onRetry={() => refetch()} />;
+    return <ErrorBlock message={`${t('index.dashboardLoadFailed')}：${errDetail(error)}`} onRetry={() => refetch()} />;
   }
 
   const severityEntries = Object.entries(data.by_severity);
@@ -175,11 +177,11 @@ export default function Index() {
         <div className="space-y-5 lg:col-span-2">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">告警严重度分布</CardTitle>
+              <CardTitle className="text-base">{t('index.severityDistribution')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               {severityTotal === 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">暂无告警数据</p>
+                <p className="py-4 text-center text-sm text-muted-foreground">{t('index.noSeverityData')}</p>
               ) : (
                 severityEntries.map(([sev, count]) => (
                   <div key={sev} className="flex items-center gap-3">
@@ -205,27 +207,27 @@ export default function Index() {
           <div className="grid gap-5 sm:grid-cols-2">
             <Card>
               <CardContent className="pt-6">
-                <BarList title="TOP 错误类型" data={data.top_error_types} emptyHint="暂无分类数据" />
+                <BarList title={t('index.topErrorTypes')} data={data.top_error_types} emptyHint={t('index.topErrorTypesEmpty')} />
               </CardContent>
             </Card>
             <Card>
               <CardContent className="pt-6">
-                <BarList title="TOP 服务" data={data.top_services} emptyHint="暂无服务数据" />
+                <BarList title={t('index.topServices')} data={data.top_services} emptyHint={t('index.topServicesEmpty')} />
               </CardContent>
             </Card>
           </div>
 
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-base">最新告警</CardTitle>
+              <CardTitle className="text-base">{t('index.recentEvents')}</CardTitle>
               <Link to="/events" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                进入告警工作台
+                {t('index.gotoEvents')}
                 <ArrowRight className="h-3.5 w-3.5" />
               </Link>
             </CardHeader>
             <CardContent>
               {data.recent_events.length === 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">暂无告警事件</p>
+                <p className="py-4 text-center text-sm text-muted-foreground">{t('index.noRecentEvents')}</p>
               ) : (
                 <ul className="divide-y">
                   {data.recent_events.map((e) => (
@@ -233,7 +235,7 @@ export default function Index() {
                       <SeverityBadge severity={e.severity} />
                       <span className="min-w-0 flex-1 truncate font-medium">{e.service_name}</span>
                       <span className="hidden min-w-0 flex-1 truncate text-xs text-muted-foreground sm:block">
-                        {e.error_type || '未分类'}
+                        {e.error_type || t('index.unclassified')}
                       </span>
                       <span className="text-xs text-muted-foreground">{fmtTime(e.created_at)}</span>
                     </li>
@@ -248,7 +250,7 @@ export default function Index() {
         <div className="space-y-5">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">依赖健康</CardTitle>
+              <CardTitle className="text-base">{t('index.healthTitle')}</CardTitle>
             </CardHeader>
             <CardContent>
               <ul className="space-y-3">
@@ -261,7 +263,7 @@ export default function Index() {
                       )}
                     />
                     <div className="min-w-0">
-                      <p className="text-sm font-medium">{HEALTH_LABEL[key] ?? key}</p>
+                      <p className="text-sm font-medium">{t(`index.health.${key}`, { defaultValue: key })}</p>
                       <p className="text-xs text-muted-foreground">{h.detail}</p>
                     </div>
                   </li>
@@ -272,21 +274,21 @@ export default function Index() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">知识库</CardTitle>
+              <CardTitle className="text-base">{t('index.kbCardTitle')}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
                   <p className="text-xl font-semibold">{data.kb.total}</p>
-                  <p className="text-xs text-muted-foreground">案例总数</p>
+                  <p className="text-xs text-muted-foreground">{t('index.kbTotal')}</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold">{data.kb.archived}</p>
-                  <p className="text-xs text-muted-foreground">已归档</p>
+                  <p className="text-xs text-muted-foreground">{t('index.kbArchived')}</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold">{data.kb.avg_feedback}</p>
-                  <p className="text-xs text-muted-foreground">平均反馈分</p>
+                  <p className="text-xs text-muted-foreground">{t('index.kbAvgFeedback')}</p>
                 </div>
               </div>
               <Link
@@ -294,16 +296,16 @@ export default function Index() {
                 className="mt-4 flex items-center justify-center gap-1.5 rounded-md border py-2 text-xs font-medium text-primary hover:bg-accent"
               >
                 <BookOpenText className="h-3.5 w-3.5" />
-                管理知识库
+                {t('index.manageKb')}
               </Link>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
-              <CardTitle className="text-base">知识健康</CardTitle>
+              <CardTitle className="text-base">{t('index.kbHealthTitle')}</CardTitle>
               <Link to="/ops" className="flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                健康报表
+                {t('index.healthReport')}
                 <ArrowRight className="h-3.5 w-3.5" />
               </Link>
             </CardHeader>
@@ -311,15 +313,15 @@ export default function Index() {
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
                   <p className="text-xl font-semibold text-teal-600 dark:text-teal-400">{data.kb_health.green}</p>
-                  <p className="text-xs text-muted-foreground">健康</p>
+                  <p className="text-xs text-muted-foreground">{t('index.healthGreen')}</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-amber-600 dark:text-amber-400">{data.kb_health.yellow}</p>
-                  <p className="text-xs text-muted-foreground">关注</p>
+                  <p className="text-xs text-muted-foreground">{t('index.healthYellow')}</p>
                 </div>
                 <div>
                   <p className="text-xl font-semibold text-red-600 dark:text-red-400">{data.kb_health.red}</p>
-                  <p className="text-xs text-muted-foreground">风险</p>
+                  <p className="text-xs text-muted-foreground">{t('index.healthRed')}</p>
                 </div>
               </div>
               <div className="mt-4 space-y-1.5">
@@ -335,9 +337,11 @@ export default function Index() {
                 <p className="flex items-center justify-between text-xs text-muted-foreground">
                   <span className="inline-flex items-center gap-1">
                     <HeartPulse className="h-3 w-3" />
-                    健康率 {data.kb_health.health_rate !== null ? fmtPercent(data.kb_health.health_rate) : '—'}
+                    {t('index.healthRate', {
+                      rate: data.kb_health.health_rate !== null ? fmtPercent(data.kb_health.health_rate) : '—',
+                    })}
                   </span>
-                  <span>共 {data.kb_health.total} 个案例</span>
+                  <span>{t('index.healthTotal', { count: data.kb_health.total })}</span>
                 </p>
               </div>
             </CardContent>
@@ -345,7 +349,7 @@ export default function Index() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">待办事项</CardTitle>
+              <CardTitle className="text-base">{t('index.todoTitle')}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2.5">
               <Link
@@ -353,7 +357,7 @@ export default function Index() {
                 className="flex items-center gap-2.5 rounded-md border p-3 transition-colors hover:bg-accent"
               >
                 <ClipboardCheck className="h-4 w-4 text-primary" />
-                <span className="flex-1 text-sm">待审批请求</span>
+                <span className="flex-1 text-sm">{t('index.todoApprovals')}</span>
                 <span className="text-lg font-semibold">{data.todo.pending_approvals}</span>
               </Link>
               <Link
@@ -361,7 +365,7 @@ export default function Index() {
                 className="flex items-center gap-2.5 rounded-md border p-3 transition-colors hover:bg-accent"
               >
                 <BellRing className="h-4 w-4 text-primary" />
-                <span className="flex-1 text-sm">待处理未知模板</span>
+                <span className="flex-1 text-sm">{t('index.todoUnknowns')}</span>
                 <span className="text-lg font-semibold">{data.todo.pending_unknowns}</span>
               </Link>
             </CardContent>

@@ -1,5 +1,7 @@
 # RootSleuth 运营控制台前端
 
+[English](README.en.md) | 简体中文
+
 > 项目定位：本目录是 RootSleuth 运营控制台前端（React + Vite + shadcn/ui + Tailwind CSS）。项目总览见仓库根目录 `README.md`，使用手册见 `docs/CONSOLE_USER_GUIDE.md`，帮助中心页面为 `/help`。
 
 ## 技术栈

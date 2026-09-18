@@ -1,4 +1,5 @@
 /** 帮助中心：控制台使用手册与常见问题；完整文档见仓库 docs/ 目录。 */
+import { useTranslation } from 'react-i18next';
 import Markdown from 'markdown-to-jsx';
 import { BookOpenText, LifeBuoy } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -106,25 +107,30 @@ function DocArticle({ content }: { content: string }) {
 }
 
 export default function HelpPage() {
+  const { t } = useTranslation();
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">帮助中心</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            控制台使用手册与常见问题；完整 Markdown 文档见仓库 docs/ 目录。
-          </p>
+          <h1 className="text-lg font-semibold tracking-tight">{t('help.title')}</h1>
+          <p className="mt-0.5 text-sm text-muted-foreground">{t('help.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1"><BookOpenText className="h-3.5 w-3.5" />使用手册</span>
-          <span className="flex items-center gap-1"><LifeBuoy className="h-3.5 w-3.5" />FAQ</span>
+          <span className="flex items-center gap-1">
+            <BookOpenText className="h-3.5 w-3.5" />
+            {t('help.guideBadge')}
+          </span>
+          <span className="flex items-center gap-1">
+            <LifeBuoy className="h-3.5 w-3.5" />
+            {t('help.faqBadge')}
+          </span>
         </div>
       </div>
 
       <Tabs defaultValue="guide">
         <TabsList>
-          <TabsTrigger value="guide">使用手册</TabsTrigger>
-          <TabsTrigger value="faq">常见问题</TabsTrigger>
+          <TabsTrigger value="guide">{t('help.guideTab')}</TabsTrigger>
+          <TabsTrigger value="faq">{t('help.faqTab')}</TabsTrigger>
         </TabsList>
         <TabsContent value="guide" className="mt-4">
           <DocArticle content={USER_GUIDE} />

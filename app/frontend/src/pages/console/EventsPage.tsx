@@ -1,6 +1,7 @@
-/** C4/C5 告警工作台：筛选列表 + 详情（召回链路、AI 诊断、命令复制、反馈闭环）。 */
+/** C4/C5 告警工作台：筛选列表 + 详情（召回链路、AI 诊断、命令复制、反馈闭环）。文案经 i18n 双语渲染。 */
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { ThumbsDown, ThumbsUp, Stethoscope, FileJson } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -37,22 +38,22 @@ import { cn } from '@/lib/utils';
 const PAGE_SIZE = 20;
 
 const SEVERITY_OPTIONS = [
-  { value: 'all', label: '全部级别' },
-  { value: 'critical', label: '严重' },
-  { value: 'warning', label: '警告' },
-  { value: 'info', label: '提示' },
+  { value: 'all', labelKey: 'events.filter.allSeverity' },
+  { value: 'critical', labelKey: 'shared.severity.critical' },
+  { value: 'warning', labelKey: 'shared.severity.warning' },
+  { value: 'info', labelKey: 'shared.severity.info' },
 ];
 const STATUS_OPTIONS = [
-  { value: 'all', label: '全部状态' },
-  { value: 'pending', label: '待处理' },
-  { value: 'diagnosed', label: '已诊断' },
-  { value: 'unknown', label: '未知' },
+  { value: 'all', labelKey: 'events.filter.allStatus' },
+  { value: 'pending', labelKey: 'shared.eventStatus.pending' },
+  { value: 'diagnosed', labelKey: 'shared.eventStatus.diagnosed' },
+  { value: 'unknown', labelKey: 'shared.eventStatus.unknown' },
 ];
 const TIME_OPTIONS = [
-  { value: '1h', label: '近 1 小时' },
-  { value: '24h', label: '近 24 小时' },
-  { value: '7d', label: '近 7 天' },
-  { value: 'all', label: '全部时间' },
+  { value: '1h', labelKey: 'events.filter.time1h' },
+  { value: '24h', labelKey: 'events.filter.time24h' },
+  { value: '7d', labelKey: 'events.filter.time7d' },
+  { value: 'all', labelKey: 'events.filter.timeAll' },
 ];
 
 interface Filters {
@@ -87,50 +88,52 @@ function filtersToParams(f: Filters, skip: number): Record<string, string | numb
 }
 
 function FilterBar({ filters, onChange }: { filters: Filters; onChange: (f: Filters) => void }) {
+  const { t } = useTranslation();
   const set = (patch: Partial<Filters>) => onChange({ ...filters, ...patch });
   return (
     <div className="flex flex-wrap items-end gap-2.5">
       <div className="w-32">
-        <Label className="mb-1 text-xs">严重度</Label>
+        <Label className="mb-1 text-xs">{t('events.filter.severity')}</Label>
         <Select value={filters.severity} onValueChange={(v) => set({ severity: v })}>
           <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>{SEVERITY_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          <SelectContent>{SEVERITY_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{t(o.labelKey)}</SelectItem>)}</SelectContent>
         </Select>
       </div>
       <div className="w-32">
-        <Label className="mb-1 text-xs">状态</Label>
+        <Label className="mb-1 text-xs">{t('events.filter.status')}</Label>
         <Select value={filters.status} onValueChange={(v) => set({ status: v })}>
           <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>{STATUS_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          <SelectContent>{STATUS_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{t(o.labelKey)}</SelectItem>)}</SelectContent>
         </Select>
       </div>
       <div className="w-32">
-        <Label className="mb-1 text-xs">时间范围</Label>
+        <Label className="mb-1 text-xs">{t('events.filter.timeRange')}</Label>
         <Select value={filters.time_range} onValueChange={(v) => set({ time_range: v })}>
           <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-          <SelectContent>{TIME_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
+          <SelectContent>{TIME_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{t(o.labelKey)}</SelectItem>)}</SelectContent>
         </Select>
       </div>
       <div className="w-36">
-        <Label className="mb-1 text-xs">服务名</Label>
-        <Input className="h-9 text-xs" placeholder="如 payment-service" value={filters.service} onChange={(e) => set({ service: e.target.value })} />
+        <Label className="mb-1 text-xs">{t('events.filter.service')}</Label>
+        <Input className="h-9 text-xs" placeholder={t('events.filter.servicePlaceholder')} value={filters.service} onChange={(e) => set({ service: e.target.value })} />
       </div>
       <div className="w-36">
-        <Label className="mb-1 text-xs">错误类型</Label>
-        <Input className="h-9 text-xs" placeholder="如 gateway_502" value={filters.error_type} onChange={(e) => set({ error_type: e.target.value })} />
+        <Label className="mb-1 text-xs">{t('events.filter.errorType')}</Label>
+        <Input className="h-9 text-xs" placeholder={t('events.filter.errorTypePlaceholder')} value={filters.error_type} onChange={(e) => set({ error_type: e.target.value })} />
       </div>
       <div className="w-40">
-        <Label className="mb-1 text-xs">搜索</Label>
-        <Input className="h-9 text-xs" placeholder="事件 ID / 模板 / 日志" value={filters.q} onChange={(e) => set({ q: e.target.value })} />
+        <Label className="mb-1 text-xs">{t('events.filter.search')}</Label>
+        <Input className="h-9 text-xs" placeholder={t('events.filter.searchPlaceholder')} value={filters.q} onChange={(e) => set({ q: e.target.value })} />
       </div>
       <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={() => onChange(DEFAULT_FILTERS)}>
-        重置
+        {t('events.filter.reset')}
       </Button>
     </div>
   );
 }
 
 function EventRow({ e, active, onClick }: { e: EventItem; active: boolean; onClick: () => void }) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
@@ -145,14 +148,15 @@ function EventRow({ e, active, onClick }: { e: EventItem; active: boolean; onCli
         <span className="ml-auto text-xs text-muted-foreground">{fmtTime(e.created_at)}</span>
       </div>
       <p className="mt-1.5 truncate text-sm font-medium">{e.service_name}</p>
-      <p className="truncate text-xs text-muted-foreground">{e.error_type || '未分类'} · {e.event_id}</p>
+      <p className="truncate text-xs text-muted-foreground">{e.error_type || t('events.unclassified')} · {e.event_id}</p>
     </button>
   );
 }
 
 function CandidatesList({ detail }: { detail: EventDetail }) {
+  const { t } = useTranslation();
   if (!detail.candidates || detail.candidates.length === 0) {
-    return <p className="text-xs text-muted-foreground">无召回候选案例（unknown 模板会进入未知队列）</p>;
+    return <p className="text-xs text-muted-foreground">{t('events.noCandidates')}</p>;
   }
   return (
     <ol className="space-y-2.5">
@@ -162,18 +166,18 @@ function CandidatesList({ detail }: { detail: EventDetail }) {
             <Badge variant="secondary" className="font-mono">#{i + 1}</Badge>
             <span className="font-mono font-medium">{c.case_id}</span>
             <span className="text-muted-foreground">{c.error_type} · {c.service_name}</span>
-            <span className="ml-auto font-medium text-primary">相似度 {(c.score * 100).toFixed(1)}%</span>
+            <span className="ml-auto font-medium text-primary">{t('events.similarity', { score: `${(c.score * 100).toFixed(1)}%` })}</span>
             {typeof c.embedding_score === 'number' && (
-              <Badge variant="outline" className="font-mono">语义 {c.embedding_score.toFixed(3)}</Badge>
+              <Badge variant="outline" className="font-mono">{t('events.semantic', { score: c.embedding_score.toFixed(3) })}</Badge>
             )}
             {typeof c.feedback_score === 'number' && c.feedback_score !== 0 && (
               <Badge variant="outline" className={c.feedback_score > 0 ? 'text-teal-700' : 'text-red-600'}>
-                反馈 {c.feedback_score > 0 ? '+' : ''}{c.feedback_score}
+                {t('events.feedbackScore', { score: `${c.feedback_score > 0 ? '+' : ''}${c.feedback_score}` })}
               </Badge>
             )}
           </div>
-          <p className="mt-1.5 leading-relaxed text-muted-foreground">根因：{c.root_cause || '—'}</p>
-          <p className="leading-relaxed text-muted-foreground">处置：{c.solution || '—'}</p>
+          <p className="mt-1.5 leading-relaxed text-muted-foreground">{t('events.rootCauseLine', { value: c.root_cause || '—' })}</p>
+          <p className="leading-relaxed text-muted-foreground">{t('events.solutionLine', { value: c.solution || '—' })}</p>
         </li>
       ))}
     </ol>
@@ -181,6 +185,7 @@ function CandidatesList({ detail }: { detail: EventDetail }) {
 }
 
 function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: DiagnosisResult | null }) {
+  const { t } = useTranslation();
   const diagnosis = result?.diagnosis
     ? result.diagnosis
     : detail.ai_output
@@ -190,7 +195,7 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
   const quality = result?.quality ?? detail.ai_output?.quality ?? null;
 
   if (!diagnosis) {
-    return <p className="text-xs text-muted-foreground">尚无 AI 诊断结果，点击右上角「AI 诊断」生成。</p>;
+    return <p className="text-xs text-muted-foreground">{t('events.noDiagnosis')}</p>;
   }
   return (
     <div className="space-y-3 text-sm">
@@ -198,20 +203,20 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <RagBadge status={result.rag.status} />
           {result.rag.score !== null && (
-            <Badge variant="outline">召回分 {(result.rag.score * 100).toFixed(1)}%</Badge>
+            <Badge variant="outline">{t('events.recallScore', { score: `${(result.rag.score * 100).toFixed(1)}%` })}</Badge>
           )}
-          <Badge variant="outline">检索 {result.rag.ms} ms</Badge>
+          <Badge variant="outline">{t('events.retrievalMs', { ms: result.rag.ms })}</Badge>
           {typeof result.elapsed_ms === 'number' && (
-            <Badge variant="outline">端到端 {result.elapsed_ms} ms</Badge>
+            <Badge variant="outline">{t('events.e2eMs', { ms: result.elapsed_ms })}</Badge>
           )}
           {result.rag.rerank && (
             <Badge variant="outline" className="font-mono">
-              重排 {result.rag.rerank.strategy} · {result.rag.rerank.candidate_count} 候选
+              {t('events.rerankBadge', { strategy: result.rag.rerank.strategy, count: result.rag.rerank.candidate_count })}
             </Badge>
           )}
           {result.rag.embedding?.applied && (
             <Badge variant="outline">
-              Embedding 加分（权重 {result.rag.embedding.boost_weight ?? 0.5}）
+              {t('events.embeddingBoost', { weight: result.rag.embedding.boost_weight ?? 0.5 })}
             </Badge>
           )}
           {diagnosis.model && (
@@ -221,26 +226,26 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
       )}
       <QualityMetricsCard quality={quality} />
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-muted-foreground">置信度</span>
+        <span className="text-xs font-medium text-muted-foreground">{t('events.confidenceLabel')}</span>
         <ConfidenceBadge value={diagnosis.confidence} low={diagnosis.low_confidence} />
         {diagnosis.low_confidence && (
           <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700">
-            建议人工复核（阈值 {(diagnosis.threshold * 100).toFixed(0)}%）
+            {t('events.manualReview', { threshold: (diagnosis.threshold * 100).toFixed(0) })}
           </Badge>
         )}
       </div>
       <div>
-        <p className="mb-1 text-xs font-medium text-muted-foreground">根因分析</p>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">{t('events.rootCauseTitle')}</p>
         <p className="leading-relaxed">{diagnosis.root_cause}</p>
       </div>
       <div>
-        <p className="mb-1 text-xs font-medium text-muted-foreground">处置建议</p>
+        <p className="mb-1 text-xs font-medium text-muted-foreground">{t('events.solutionTitle')}</p>
         <p className="leading-relaxed">{diagnosis.solution}</p>
       </div>
       <div>
         <div className="mb-1 flex items-center justify-between">
-          <p className="text-xs font-medium text-muted-foreground">处置命令</p>
-          <CopyButton text={diagnosis.command} label="复制命令" size="xs" />
+          <p className="text-xs font-medium text-muted-foreground">{t('events.commandTitle')}</p>
+          <CopyButton text={diagnosis.command} label={t('events.copyCommand')} size="xs" />
         </div>
         <pre className="log-block">{diagnosis.command}</pre>
       </div>
@@ -249,6 +254,7 @@ function DiagnosisPanel({ detail, result }: { detail: EventDetail; result: Diagn
 }
 
 function FeedbackSection({ detail }: { detail: EventDetail }) {
+  const { t } = useTranslation();
   const perms = usePermissions();
   const queryClient = useQueryClient();
   const [rating, setRating] = useState<'up' | 'down' | null>(null);
@@ -269,14 +275,20 @@ function FeedbackSection({ detail }: { detail: EventDetail }) {
         comment,
       }),
     onSuccess: (res) => {
-      toast.success(`反馈已提交，案例 ${res.case_id} 反馈分更新为 ${res.feedback_score}${res.correction_change_set ? '，并已生成人工修正变更集' : ''}`);
+      toast.success(
+        t('events.feedback.successToast', {
+          caseId: res.case_id,
+          score: res.feedback_score,
+          extra: res.correction_change_set ? t('events.feedback.correctionExtra') : '',
+        }),
+      );
       setRating(null);
       setCorrection({ root_cause: '', solution: '' });
       setComment('');
       queryClient.invalidateQueries({ queryKey: ['event', detail.id] });
       queryClient.invalidateQueries({ queryKey: ['events'] });
     },
-    onError: (e) => toast.error(`反馈提交失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('events.feedback.errorToast', { error: errDetail(e) })),
   });
 
   const disabled =
@@ -294,7 +306,7 @@ function FeedbackSection({ detail }: { detail: EventDetail }) {
           onClick={() => setRating('up')}
         >
           <ThumbsUp className="mr-1.5 h-3.5 w-3.5" />
-          诊断准确
+          {t('events.feedback.accurate')}
         </Button>
         <Button
           variant={rating === 'down' ? 'destructive' : 'outline'}
@@ -302,37 +314,35 @@ function FeedbackSection({ detail }: { detail: EventDetail }) {
           onClick={() => setRating('down')}
         >
           <ThumbsDown className="mr-1.5 h-3.5 w-3.5" />
-          诊断有误
+          {t('events.feedback.inaccurate')}
         </Button>
       </div>
       {rating === 'down' && (
         <div className="space-y-2.5 rounded-md border bg-secondary/40 p-3">
-          <p className="text-xs text-muted-foreground">
-            标记为「有误」时请填写人工修正或说明；修正内容会自动生成知识变更集并进入审批流。
-          </p>
+          <p className="text-xs text-muted-foreground">{t('events.feedback.inaccurateHint')}</p>
           <div>
-            <Label className="mb-1 text-xs">修正后的根因（可选）</Label>
+            <Label className="mb-1 text-xs">{t('events.feedback.correctedRootCause')}</Label>
             <Textarea
               className="min-h-16 text-xs"
-              placeholder="人工确认的真实根因"
+              placeholder={t('events.feedback.rootCausePlaceholder')}
               value={correction.root_cause}
               onChange={(e) => setCorrection((s) => ({ ...s, root_cause: e.target.value }))}
             />
           </div>
           <div>
-            <Label className="mb-1 text-xs">修正后的处置（可选）</Label>
+            <Label className="mb-1 text-xs">{t('events.feedback.correctedSolution')}</Label>
             <Textarea
               className="min-h-16 text-xs"
-              placeholder="人工确认的处置方案"
+              placeholder={t('events.feedback.solutionPlaceholder')}
               value={correction.solution}
               onChange={(e) => setCorrection((s) => ({ ...s, solution: e.target.value }))}
             />
           </div>
           <div>
-            <Label className="mb-1 text-xs">备注说明（可选）</Label>
+            <Label className="mb-1 text-xs">{t('events.feedback.comment')}</Label>
             <Input
               className="h-9 text-xs"
-              placeholder="例如：召回案例过旧，拓扑已变更"
+              placeholder={t('events.feedback.commentPlaceholder')}
               value={comment}
               onChange={(e) => setComment(e.target.value)}
             />
@@ -340,10 +350,10 @@ function FeedbackSection({ detail }: { detail: EventDetail }) {
         </div>
       )}
       <Button size="sm" disabled={disabled} onClick={() => mutation.mutate()}>
-        {mutation.isPending ? '提交中…' : '提交反馈'}
+        {mutation.isPending ? t('events.feedback.submitting') : t('events.feedback.submit')}
       </Button>
       {perms && !perms.can_feedback && (
-        <p className="text-xs text-muted-foreground">当前角色（{perms.role_label}）仅可查看，无反馈权限。</p>
+        <p className="text-xs text-muted-foreground">{t('events.feedback.noPermission', { role: perms.role_label })}</p>
       )}
     </div>
   );
@@ -355,6 +365,7 @@ function DetailBody({ detail, result, onDiagnose, diagnosing }: {
   onDiagnose: () => void;
   diagnosing: boolean;
 }) {
+  const { t } = useTranslation();
   const perms = usePermissions();
   return (
     <div className="space-y-5">
@@ -370,36 +381,36 @@ function DetailBody({ detail, result, onDiagnose, diagnosing }: {
             disabled={diagnosing}
           >
             <Stethoscope className="mr-1.5 h-3.5 w-3.5" />
-            {diagnosing ? '诊断中…' : 'AI 诊断'}
+            {diagnosing ? t('events.diagnosing') : t('events.diagnoseBtn')}
           </Button>
         )}
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-md border bg-secondary/40 p-3 text-xs sm:grid-cols-3">
-        <div><p className="text-muted-foreground">事件 ID</p><p className="mt-0.5 truncate font-mono">{detail.event_id}</p></div>
-        <div><p className="text-muted-foreground">服务</p><p className="mt-0.5 truncate font-medium">{detail.service_name}</p></div>
-        <div><p className="text-muted-foreground">集群</p><p className="mt-0.5 truncate">{detail.cluster || '—'}</p></div>
-        <div><p className="text-muted-foreground">错误类型</p><p className="mt-0.5 truncate">{detail.error_type || '—'}</p></div>
-        <div><p className="text-muted-foreground">RAG 耗时</p><p className="mt-0.5">{detail.rag_ms !== null ? `${detail.rag_ms} ms` : '—'}</p></div>
-        <div><p className="text-muted-foreground">标准化耗时</p><p className="mt-0.5">{detail.std_ms !== null ? `${detail.std_ms} ms` : '—'}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldEventId')}</p><p className="mt-0.5 truncate font-mono">{detail.event_id}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldService')}</p><p className="mt-0.5 truncate font-medium">{detail.service_name}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldCluster')}</p><p className="mt-0.5 truncate">{detail.cluster || '—'}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldErrorType')}</p><p className="mt-0.5 truncate">{detail.error_type || '—'}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldRagMs')}</p><p className="mt-0.5">{detail.rag_ms !== null ? `${detail.rag_ms} ms` : '—'}</p></div>
+        <div><p className="text-muted-foreground">{t('events.fieldStdMs')}</p><p className="mt-0.5">{detail.std_ms !== null ? `${detail.std_ms} ms` : '—'}</p></div>
       </div>
 
       {detail.degraded_reason && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
-          降级原因：<span className="font-mono">{detail.degraded_reason}</span>
-          —— 本次诊断按降级策略输出，请以人工复核为准。
+          {t('events.degradedPrefix')}<span className="font-mono">{detail.degraded_reason}</span>
+          {t('events.degradedSuffix')}
         </div>
       )}
 
       <div>
-        <p className="mb-1.5 text-sm font-semibold">AI 诊断结论</p>
+        <p className="mb-1.5 text-sm font-semibold">{t('events.conclusionTitle')}</p>
         <DiagnosisPanel detail={detail} result={result} />
       </div>
 
       <Separator />
 
       <div>
-        <p className="mb-1.5 text-sm font-semibold">召回链路（Milvus 向量召回 → 业务重排）</p>
+        <p className="mb-1.5 text-sm font-semibold">{t('events.recallChainTitle')}</p>
         <CandidatesList detail={detail} />
       </div>
 
@@ -408,35 +419,35 @@ function DetailBody({ detail, result, onDiagnose, diagnosing }: {
       <div>
         <p className="mb-1.5 flex items-center gap-1.5 text-sm font-semibold">
           <FileJson className="h-4 w-4" />
-          LLM 原始 JSON 输出
+          {t('events.rawJsonTitle')}
         </p>
         {detail.ai_output ? (
           <JsonPre data={detail.ai_output} />
         ) : (
-          <p className="text-xs text-muted-foreground">暂无 JSON 输出</p>
+          <p className="text-xs text-muted-foreground">{t('events.noJson')}</p>
         )}
       </div>
 
       <Separator />
 
       <div>
-        <p className="mb-1.5 text-sm font-semibold">原始日志</p>
-        <pre className="log-block max-h-40 overflow-y-auto">{detail.raw_log || '（无）'}</pre>
+        <p className="mb-1.5 text-sm font-semibold">{t('events.rawLogTitle')}</p>
+        <pre className="log-block max-h-40 overflow-y-auto">{detail.raw_log || t('events.none')}</pre>
       </div>
       <div>
-        <p className="mb-1.5 text-sm font-semibold">告警模板</p>
-        <pre className="log-block">{detail.template || '（无）'}</pre>
+        <p className="mb-1.5 text-sm font-semibold">{t('events.templateTitle')}</p>
+        <pre className="log-block">{detail.template || t('events.none')}</pre>
       </div>
       <div>
-        <p className="mb-1.5 text-sm font-semibold">拓扑快照</p>
-        <pre className="log-block">{detail.topology || '（无）'}</pre>
+        <p className="mb-1.5 text-sm font-semibold">{t('events.topologyTitle')}</p>
+        <pre className="log-block">{detail.topology || t('events.none')}</pre>
       </div>
 
       <Separator />
 
       {perms?.can_feedback && (
         <div>
-          <p className="mb-1.5 text-sm font-semibold">人工反馈闭环</p>
+          <p className="mb-1.5 text-sm font-semibold">{t('events.feedbackTitle')}</p>
           <FeedbackSection detail={detail} />
         </div>
       )}
@@ -445,6 +456,7 @@ function DetailBody({ detail, result, onDiagnose, diagnosing }: {
 }
 
 export default function EventsPage() {
+  const { t } = useTranslation();
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [page, setPage] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -467,13 +479,13 @@ export default function EventsPage() {
 
   const diagnoseMutation = useMutation({
     mutationFn: (id: number) => consoleApi.diagnose(id),
-    onMutate: (id) => toast(`诊断请求已发出（事件 #${id}），正在执行向量召回与 LLM 分析…`, { duration: 15000 }),
+    onMutate: (id) => toast(t('events.diagnoseToast', { id }), { duration: 15000 }),
     onSuccess: (res) => {
-      toast.success(res.message || 'AI 诊断完成');
+      toast.success(res.message || t('events.diagnoseSuccess'));
       queryClient.invalidateQueries({ queryKey: ['event', selectedId] });
       queryClient.invalidateQueries({ queryKey: ['events'] });
     },
-    onError: (e) => toast.error(`诊断失败：${errDetail(e)}`, { duration: 15000 }),
+    onError: (e) => toast.error(t('events.diagnoseError', { error: errDetail(e) }), { duration: 15000 }),
   });
 
   const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
@@ -492,9 +504,9 @@ export default function EventsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">告警工作台</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t('events.title')}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          告警流检索、AI 根因诊断与人工反馈闭环。
+          {t('events.subtitle')}
         </p>
       </div>
 
@@ -505,9 +517,10 @@ export default function EventsPage() {
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">
-              告警列表
+              {t('events.listTitle')}
               <span className="ml-2 text-xs font-normal text-muted-foreground">
-                共 {total} 条{totalPages > 1 ? ` · 第 ${page + 1}/${totalPages} 页` : ''}
+                {t('events.listTotal', { total })}
+                {totalPages > 1 ? ` · ${t('events.listPage', { page: page + 1, pages: totalPages })}` : ''}
               </span>
             </CardTitle>
           </CardHeader>
@@ -517,8 +530,8 @@ export default function EventsPage() {
               error={listQuery.isError ? errDetail(listQuery.error) : null}
               onRetry={() => listQuery.refetch()}
               isEmpty={items.length === 0}
-              empty="没有符合条件的告警"
-              emptyHint="尝试调整筛选条件或时间范围"
+              empty={t('events.empty')}
+              emptyHint={t('events.emptyHint')}
             >
               <div className="space-y-2">
                 {items.map((e) => (
@@ -528,11 +541,11 @@ export default function EventsPage() {
               {totalPages > 1 && (
                 <div className="mt-3 flex items-center justify-between">
                   <Button variant="outline" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
-                    上一页
+                    {t('events.prevPage')}
                   </Button>
                   <span className="text-xs text-muted-foreground">{page + 1} / {totalPages}</span>
                   <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
-                    下一页
+                    {t('events.nextPage')}
                   </Button>
                 </div>
               )}
@@ -543,11 +556,11 @@ export default function EventsPage() {
         {/* 右：详情（桌面） */}
         <Card className="hidden lg:col-span-3 lg:block">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">事件详情与诊断</CardTitle>
+            <CardTitle className="text-sm">{t('events.detailTitle')}</CardTitle>
           </CardHeader>
           <CardContent>
             {selectedId === null ? (
-              <p className="py-16 text-center text-sm text-muted-foreground">从左侧选择一条告警查看详情并诊断</p>
+              <p className="py-16 text-center text-sm text-muted-foreground">{t('events.detailPlaceholder')}</p>
             ) : (
               <StateGate
                 loading={detailQuery.isLoading}
@@ -562,7 +575,7 @@ export default function EventsPage() {
                     diagnosing={diagnoseMutation.isPending}
                   />
                 )}
-                {diagnoseMutation.isPending && <SpinnerLine text="正在执行向量召回与 LLM 诊断，通常需要数秒…" />}
+                {diagnoseMutation.isPending && <SpinnerLine text={t('events.diagnosingLine')} />}
               </StateGate>
             )}
           </CardContent>
@@ -572,7 +585,7 @@ export default function EventsPage() {
       {/* 移动端详情抽屉 */}
       <Sheet open={mobileDetailOpen} onOpenChange={setMobileDetailOpen}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
-          <SheetTitle>事件详情与诊断</SheetTitle>
+          <SheetTitle>{t('events.detailTitle')}</SheetTitle>
           <div className="mt-4">
             {detail && (
               <DetailBody

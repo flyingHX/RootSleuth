@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, KeyRound, Save } from 'lucide-react';
 import { toast } from 'sonner';
+import { useTranslation } from 'react-i18next';
 import {
   consoleApi,
   errDetail,
@@ -23,37 +24,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 
-const ACTION_LABELS: Record<string, string> = {
-  feedback: '人工反馈',
-  diagnosis_run: 'AI 诊断',
-  kb_edit_submit: '知识库变更提交',
-  kb_publish: '知识库发布',
-  kb_rollback: '知识库回滚',
-  merge_proposal_create: '合并提案创建',
-  merge_apply: '合并执行',
-  approval_approve: '审批通过',
-  approval_reject: '审批拒绝',
-  approval_withdraw: '审批撤回',
-  rule_publish: '规则发布',
-  rule_rollback: '规则回滚',
-  unknown_promote_request: '未知模板晋升',
-  unknown_discard: '未知模板废弃',
-  config_update: '配置更新',
-  llm_config_test: 'LLM 配置连通性测试',
-};
-
-const TARGET_LABELS: Record<string, string> = {
-  event: '告警事件',
-  kb_case: '知识案例',
-  kb_change_set: '知识变更集',
-  kb_merge_proposal: '合并提案',
-  approval_request: '审批单',
-  rule_version: '规则版本',
-  unknown_template: '未知模板',
-  console_config: '控制台配置',
-};
-
 function AuditTab() {
+  const { t } = useTranslation();
   const [action, setAction] = useState('');
   const [actor, setActor] = useState('');
   const [targetType, setTargetType] = useState('');
@@ -75,10 +47,10 @@ function AuditTab() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2.5">
-        <Input className="h-9 w-44 text-xs" placeholder="操作（如 kb_publish）" value={action} onChange={(e) => setAction(e.target.value)} />
-        <Input className="h-9 w-44 text-xs" placeholder="操作人（邮箱）" value={actor} onChange={(e) => setActor(e.target.value)} />
-        <Input className="h-9 w-44 text-xs" placeholder="对象类型（如 kb_case）" value={targetType} onChange={(e) => setTargetType(e.target.value)} />
-        <span className="text-xs text-muted-foreground">共 {query.data?.total ?? 0} 条审计记录</span>
+        <Input className="h-9 w-44 text-xs" placeholder={t('ops.audit.actionPlaceholder')} value={action} onChange={(e) => setAction(e.target.value)} />
+        <Input className="h-9 w-44 text-xs" placeholder={t('ops.audit.actorPlaceholder')} value={actor} onChange={(e) => setActor(e.target.value)} />
+        <Input className="h-9 w-44 text-xs" placeholder={t('ops.audit.targetPlaceholder')} value={targetType} onChange={(e) => setTargetType(e.target.value)} />
+        <span className="text-xs text-muted-foreground">{t('ops.audit.total', { count: query.data?.total ?? 0 })}</span>
       </div>
 
       <StateGate
@@ -86,8 +58,8 @@ function AuditTab() {
         error={query.isError ? errDetail(query.error) : null}
         onRetry={() => query.refetch()}
         isEmpty={items.length === 0}
-        empty="没有符合条件的审计记录"
-        emptyHint="尝试清空筛选条件"
+        empty={t('ops.audit.empty')}
+        emptyHint={t('ops.audit.emptyHint')}
       >
         <Card>
           <CardContent className="p-0">
@@ -100,22 +72,22 @@ function AuditTab() {
                       className="flex w-full flex-wrap items-center gap-2 text-left text-xs"
                       onClick={() => setExpandedId(open ? null : log.id)}
                     >
-                      <Badge variant="secondary">{ACTION_LABELS[log.action] ?? log.action}</Badge>
+                      <Badge variant="secondary">{t(`ops.audit.actions.${log.action}`, { defaultValue: log.action })}</Badge>
                       <span className="font-medium">{log.actor}</span>
                       <span className="text-muted-foreground">
-                        {TARGET_LABELS[log.target_type] ?? log.target_type} · {log.target_id}
+                        {t(`ops.audit.targets.${log.target_type}`, { defaultValue: log.target_type })} · {log.target_id}
                       </span>
                       <span className="ml-auto text-muted-foreground">{fmtTime(log.created_at)}</span>
                     </button>
                     {open && (
                       <div className="mt-2.5 grid gap-2.5 lg:grid-cols-2">
                         <div>
-                          <p className="mb-1 text-xs font-medium text-muted-foreground">变更前快照</p>
-                          {log.before ? <JsonPre data={log.before} /> : <p className="text-xs text-muted-foreground">（无）</p>}
+                          <p className="mb-1 text-xs font-medium text-muted-foreground">{t('ops.audit.beforeSnapshot')}</p>
+                          {log.before ? <JsonPre data={log.before} /> : <p className="text-xs text-muted-foreground">{t('ops.audit.none')}</p>}
                         </div>
                         <div>
-                          <p className="mb-1 text-xs font-medium text-muted-foreground">变更后快照</p>
-                          {log.after ? <JsonPre data={log.after} /> : <p className="text-xs text-muted-foreground">（无）</p>}
+                          <p className="mb-1 text-xs font-medium text-muted-foreground">{t('ops.audit.afterSnapshot')}</p>
+                          {log.after ? <JsonPre data={log.after} /> : <p className="text-xs text-muted-foreground">{t('ops.audit.none')}</p>}
                         </div>
                       </div>
                     )}
@@ -132,17 +104,18 @@ function AuditTab() {
 
 // ---------------- 知识健康报表（P2-1：红黄绿分级 + 同步闭环 + 内容安全 + 老化） ----------------
 
-const HEALTH_TONE: Record<'green' | 'yellow' | 'red', { label: string; badge: string }> = {
-  green: { label: '健康', badge: 'border-teal-500/30 bg-teal-500/15 text-teal-700 dark:text-teal-400' },
-  yellow: { label: '关注', badge: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400' },
-  red: { label: '风险', badge: 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-400' },
+const HEALTH_TONE: Record<'green' | 'yellow' | 'red', { labelKey: string; badge: string }> = {
+  green: { labelKey: 'ops.health.toneGreen', badge: 'border-teal-500/30 bg-teal-500/15 text-teal-700 dark:text-teal-400' },
+  yellow: { labelKey: 'ops.health.toneYellow', badge: 'border-amber-500/30 bg-amber-500/15 text-amber-700 dark:text-amber-400' },
+  red: { labelKey: 'ops.health.toneRed', badge: 'border-red-500/30 bg-red-500/15 text-red-700 dark:text-red-400' },
 };
 
 function HealthBadge({ level }: { level: 'green' | 'yellow' | 'red' }) {
+  const { t } = useTranslation();
   const tone = HEALTH_TONE[level] ?? HEALTH_TONE.green;
   return (
     <Badge variant="outline" className={cn('text-[10px]', tone.badge)}>
-      {tone.label}
+      {t(tone.labelKey)}
     </Badge>
   );
 }
@@ -158,6 +131,7 @@ function StatItem({ label, value, tone }: { label: string; value: string | numbe
 
 /** 诊断质量态势（Ops 治理视图）：复用 Dashboard 聚合（同查询缓存），展示 Trust Index 与生成/检索成功率。 */
 function QualityOverviewCard() {
+  const { t } = useTranslation();
   const { data } = useQuery({
     queryKey: ['dashboard'],
     queryFn: () => consoleApi.getDashboard(),
@@ -168,19 +142,22 @@ function QualityOverviewCard() {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm">诊断质量态势</CardTitle>
+        <CardTitle className="text-sm">{t('ops.health.qualityTitle')}</CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <StatItem label="Trust Index" value={fmt(q?.trust_index_avg, fmtPercent)} />
-        <StatItem label="质量达标率" value={fmt(q?.quality_ok_rate, fmtPercent)} />
-        <StatItem label="检索成功率" value={fmt(q?.retrieval?.success_rate, fmtPercent)} />
-        <StatItem label="生成成功率" value={fmt(q?.generation?.success_rate, fmtPercent)} />
+        <StatItem label={t('ops.health.trustIndex')} value={fmt(q?.trust_index_avg, fmtPercent)} />
+        <StatItem label={t('ops.health.qualityOkRate')} value={fmt(q?.quality_ok_rate, fmtPercent)} />
+        <StatItem label={t('ops.health.retrievalSuccess')} value={fmt(q?.retrieval?.success_rate, fmtPercent)} />
+        <StatItem label={t('ops.health.generationSuccess')} value={fmt(q?.generation?.success_rate, fmtPercent)} />
       </CardContent>
     </Card>
   );
 }
 
 function KbHealthTab() {
+  const { t, i18n } = useTranslation();
+  const zh = i18n.language?.startsWith('zh');
+  const listJoiner = zh ? '、' : ', ';
   const perms = usePermissions();
   const queryClient = useQueryClient();
   // 归档 / 巡检 / 死信重放 / 到期重试后端均要求 kb_admin 及以上，前端以等价的 can_publish 门控
@@ -201,23 +178,23 @@ function KbHealthTab() {
   const archiveMutation = useMutation({
     mutationFn: (caseId: string) => consoleApi.archiveCase(caseId),
     onSuccess: (_res, caseId) => {
-      toast.success(`案例 ${caseId} 已归档，检索侧索引已删除`);
+      toast.success(t('ops.health.toastArchived', { id: caseId }));
       invalidateHealth();
     },
-    onError: (e) => toast.error(`归档失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.health.toastArchiveFailed', { error: errDetail(e) })),
   });
 
   const retryMutation = useMutation({
     mutationFn: () => consoleApi.retryDueTasks(20),
     onSuccess: (res) => {
       if (res.executed > 0) {
-        toast.success(`已执行 ${res.executed} 个到期任务：成功 ${res.succeeded}、转死信 ${res.dead_lettered}`);
+        toast.success(t('ops.health.toastRetryExecuted', { executed: res.executed, succeeded: res.succeeded, dead: res.dead_lettered }));
       } else {
-        toast('当前没有到期的补偿任务');
+        toast(t('ops.health.toastRetryNone'));
       }
       invalidateHealth();
     },
-    onError: (e) => toast.error(`同步重试失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.health.toastRetryFailed', { error: errDetail(e) })),
   });
 
   const replayDeadMutation = useMutation({
@@ -228,11 +205,11 @@ function KbHealthTab() {
     },
     onSuccess: (res) => {
       toast.success(
-        `已重放 ${res.requeued} 个死信任务并触发重试：成功 ${res.retry.succeeded}、剩余待重试 ${res.retry.pending_remaining}`,
+        t('ops.health.toastReplayed', { count: res.requeued, succeeded: res.retry.succeeded, pending: res.retry.pending_remaining }),
       );
       invalidateHealth();
     },
-    onError: (e) => toast.error(`死信重放失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.health.toastReplayFailed', { error: errDetail(e) })),
   });
 
   const patrolMutation = useMutation({
@@ -241,24 +218,24 @@ function KbHealthTab() {
       if (dryRun) {
         setPatrolPreview(res);
         if (res.candidates.length === 0) {
-          toast.success(`老化巡检完成：无满足归档条件的候选（老化阈值 ${res.expire_days} 天）`);
+          toast.success(t('ops.health.toastPatrolNoCandidates', { expire: res.expire_days }));
         }
       } else {
         setPatrolPreview(null);
         toast.success(
           res.archived.length > 0
-            ? `老化巡检已归档 ${res.archived.length} 个案例：${res.archived.join('、')}`
-            : '老化巡检完成：无可归档案例',
+            ? t('ops.health.toastPatrolArchived', { count: res.archived.length, list: res.archived.join(listJoiner) })
+            : t('ops.health.toastPatrolNone'),
         );
         invalidateHealth();
       }
     },
-    onError: (e) => toast.error(`老化巡检失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.health.toastPatrolFailed', { error: errDetail(e) })),
   });
 
   if (query.isLoading) return <LoadingBlock rows={6} />;
   if (query.isError || !query.data) {
-    return <EmptyBlock title="健康报表加载失败" hint={errDetail(query.error)} />;
+    return <EmptyBlock title={t('ops.health.loadFailedTitle')} hint={errDetail(query.error)} />;
   }
 
   const report: KbHealthReport = query.data;
@@ -267,7 +244,7 @@ function KbHealthTab() {
   /** 逐案处置渲染：同步死信 → 重放；未确认 → 重试；统一提供归档出口；归档为生命周期终态 */
   const renderCaseActions = (c: KbHealthRiskCase) => {
     if (c.status === 'archived') {
-      return <span className="text-muted-foreground">终态，无需处理</span>;
+      return <span className="text-muted-foreground">{t('ops.health.terminalState')}</span>;
     }
     return (
       <div className="flex flex-wrap items-center gap-1.5">
@@ -279,7 +256,7 @@ function KbHealthTab() {
             disabled={!canOperate || replayDeadMutation.isPending}
             onClick={() => replayDeadMutation.mutate()}
           >
-            重放死信
+            {t('ops.health.replayDeadAction')}
           </Button>
         )}
         {!c.sync_verified && c.sync_dead === 0 && (
@@ -290,11 +267,11 @@ function KbHealthTab() {
             disabled={!canOperate || retryMutation.isPending}
             onClick={() => retryMutation.mutate()}
           >
-            重试同步
+            {t('ops.health.retrySyncAction')}
           </Button>
         )}
         {(c.content_risk === 'high' || c.content_risk === 'high_overridden') && (
-          <span className="text-[10px] leading-snug text-muted-foreground">到「知识库」编辑重审，或归档下线</span>
+          <span className="text-[10px] leading-snug text-muted-foreground">{t('ops.health.contentRiskHint')}</span>
         )}
         <Button
           size="sm"
@@ -303,9 +280,9 @@ function KbHealthTab() {
           disabled={!canOperate || archiveMutation.isPending}
           onClick={() => archiveMutation.mutate(c.case_id)}
         >
-          归档
+          {t('ops.health.archiveAction')}
         </Button>
-        {!canOperate && <span className="text-[10px] text-muted-foreground">需 kb_admin</span>}
+        {!canOperate && <span className="text-[10px] text-muted-foreground">{t('ops.health.needKbAdmin')}</span>}
       </div>
     );
   };
@@ -313,25 +290,22 @@ function KbHealthTab() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        红黄绿健康度口径：绿=verify 确认且无风险；黄=同步未确认 / 超老化阈值 / 负反馈 / PII 标记放行；
-        红=同步死信 / 高风险内容（含误报放行留痕）/ 反馈分 ≤ -2 / 超无条件老化阈值。
+        {t('ops.health.introLine1')}
       </p>
       <p className="text-xs text-muted-foreground">
-        风险闭环路径：同步死信 → 「重放死信任务」重置并立即重试；同步未确认 → 「重试同步」或等待自动补偿；
-        负反馈 ≤ -2 或超老化阈值 → 单案「归档」或「老化巡检」先预览再批量归档（归档同步删除检索索引并写审计）；
-        高风险内容 → 到「知识库」编辑重新过内容扫描或归档下线。处置操作需知识库管理员（kb_admin）及以上角色。
+        {t('ops.health.introLine2')}
       </p>
       <QualityOverviewCard />
       <div className="grid gap-4 lg:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">红黄绿分级</CardTitle>
+            <CardTitle className="text-sm">{t('ops.health.gradeTitle')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5">
             <div className="grid grid-cols-3 gap-2">
-              <StatItem label="健康" value={summary.green} tone="text-teal-600 dark:text-teal-400" />
-              <StatItem label="关注" value={summary.yellow} tone="text-amber-600 dark:text-amber-400" />
-              <StatItem label="风险" value={summary.red} tone="text-red-600 dark:text-red-400" />
+              <StatItem label={t('ops.health.toneGreen')} value={summary.green} tone="text-teal-600 dark:text-teal-400" />
+              <StatItem label={t('ops.health.toneYellow')} value={summary.yellow} tone="text-amber-600 dark:text-amber-400" />
+              <StatItem label={t('ops.health.toneRed')} value={summary.red} tone="text-red-600 dark:text-red-400" />
             </div>
             <div className="flex h-2 overflow-hidden rounded-full bg-muted">
               {summary.total > 0 && (
@@ -343,67 +317,71 @@ function KbHealthTab() {
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              健康率 {summary.health_rate !== null ? fmtPercent(summary.health_rate) : '—'} · 案例 {summary.total} 个
-              （active {summary.active} / archived {summary.archived}）
+              {t('ops.health.healthRateLine', {
+                rate: summary.health_rate !== null ? fmtPercent(summary.health_rate) : '—',
+                total: summary.total,
+                active: summary.active,
+                archived: summary.archived,
+              })}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">同步闭环</CardTitle>
+            <CardTitle className="text-sm">{t('ops.health.syncTitle')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5">
             <div className="grid grid-cols-2 gap-2">
-              <StatItem label="已确认" value={sync.verified_cases} tone="text-teal-600 dark:text-teal-400" />
-              <StatItem label="未确认" value={sync.unverified_cases} tone="text-amber-600 dark:text-amber-400" />
-              <StatItem label="待重试任务" value={sync.pending_tasks} />
+              <StatItem label={t('ops.health.verified')} value={sync.verified_cases} tone="text-teal-600 dark:text-teal-400" />
+              <StatItem label={t('ops.health.unverified')} value={sync.unverified_cases} tone="text-amber-600 dark:text-amber-400" />
+              <StatItem label={t('ops.health.pendingTasks')} value={sync.pending_tasks} />
               <StatItem
-                label="死信任务"
+                label={t('ops.health.deadTasks')}
                 value={sync.dead_tasks}
                 tone={sync.dead_tasks > 0 ? 'text-red-600 dark:text-red-400' : undefined}
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              发布后 upsert+verify 闭环状态；死信表示索引可能缺失对应知识，需人工重放。
+              {t('ops.health.syncHint')}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">内容安全</CardTitle>
+            <CardTitle className="text-sm">{t('ops.health.contentTitle')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5">
             <div className="grid grid-cols-2 gap-2">
-              <StatItem label="扫描次数" value={content_safety.scans} />
+              <StatItem label={t('ops.health.scans')} value={content_safety.scans} />
               <StatItem
-                label="拦截"
+                label={t('ops.health.blocked')}
                 value={content_safety.blocked}
                 tone={content_safety.blocked > 0 ? 'text-red-600 dark:text-red-400' : undefined}
               />
-              <StatItem label="标记放行" value={content_safety.flagged} />
-              <StatItem label="误报申诉" value={content_safety.overrides} />
+              <StatItem label={t('ops.health.flagged')} value={content_safety.flagged} />
+              <StatItem label={t('ops.health.overrides')} value={content_safety.overrides} />
             </div>
             <p className="text-xs text-muted-foreground">
-              规则版本 {content_safety.last_rule_version ?? '—'}；高风险命中默认拦截，人工申诉后留痕放行。
+              {t('ops.health.contentHint', { version: content_safety.last_rule_version ?? '—' })}
             </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm">老化治理</CardTitle>
+            <CardTitle className="text-sm">{t('ops.health.agingTitle')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5">
             <div className="grid grid-cols-2 gap-2">
-              <StatItem label="待老化案例" value={aging.stale_candidates} />
-              <StatItem label="平均年龄" value={aging.avg_age_days !== null ? `${aging.avg_age_days} 天` : '—'} />
+              <StatItem label={t('ops.health.staleCandidates')} value={aging.stale_candidates} />
+              <StatItem label={t('ops.health.avgAge')} value={aging.avg_age_days !== null ? t('ops.health.daysUnit', { n: aging.avg_age_days }) : '—'} />
             </div>
             <p className="text-xs text-muted-foreground">
-              阈值 {report.expire_days} 天（无条件 {report.unconditional_expire_days} 天）
+              {t('ops.health.agingHint', { expire: report.expire_days, unconditional: report.unconditional_expire_days })}
               {aging.oldest?.age_days !== null && aging.oldest
-                ? `；最老案例 ${aging.oldest.case_id}（${aging.oldest.age_days} 天）`
+                ? t('ops.health.oldestCase', { id: aging.oldest.case_id, days: aging.oldest.age_days })
                 : ''}
             </p>
           </CardContent>
@@ -413,7 +391,7 @@ function KbHealthTab() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
-            风险案例清单（红 / 黄）
+            {t('ops.health.riskListTitle')}
             <span className="ml-auto flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
@@ -422,7 +400,7 @@ function KbHealthTab() {
                 disabled={!canOperate || retryMutation.isPending}
                 onClick={() => retryMutation.mutate()}
               >
-                重试同步
+                {t('ops.health.retrySync')}
               </Button>
               <Button
                 size="sm"
@@ -431,7 +409,7 @@ function KbHealthTab() {
                 disabled={!canOperate || replayDeadMutation.isPending}
                 onClick={() => replayDeadMutation.mutate()}
               >
-                重放死信任务
+                {t('ops.health.replayDead')}
               </Button>
               <Button
                 size="sm"
@@ -440,7 +418,7 @@ function KbHealthTab() {
                 disabled={!canOperate || patrolMutation.isPending}
                 onClick={() => patrolMutation.mutate(true)}
               >
-                老化巡检（预览）
+                {t('ops.health.patrolPreviewBtn')}
               </Button>
             </span>
           </CardTitle>
@@ -449,12 +427,12 @@ function KbHealthTab() {
           {patrolPreview && (
             <div className="mb-3 space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
               <p className="font-medium text-amber-700 dark:text-amber-400">
-                老化巡检预览：候选 {patrolPreview.candidates.length} 个（老化阈值 {patrolPreview.expire_days} 天）
-                {patrolPreview.candidates.length === 0 && '，无可归档案例'}
+                {t('ops.health.patrolPreviewTitle', { count: patrolPreview.candidates.length, expire: patrolPreview.expire_days })}
+                {patrolPreview.candidates.length === 0 && t('ops.health.patrolNoCandidates')}
               </p>
               {patrolPreview.candidates.length > 0 && (
                 <p className="break-all text-muted-foreground">
-                  {patrolPreview.candidates.map((c) => `${c.case_id}（反馈 ${c.feedback_score ?? '—'}）`).join('、')}
+                  {patrolPreview.candidates.map((c) => t('ops.health.patrolCandidateItem', { id: c.case_id, score: c.feedback_score ?? '—' })).join(listJoiner)}
                 </p>
               )}
               <div className="flex items-center gap-2">
@@ -464,33 +442,33 @@ function KbHealthTab() {
                   disabled={!canOperate || patrolMutation.isPending || patrolPreview.candidates.length === 0}
                   onClick={() => patrolMutation.mutate(false)}
                 >
-                  {patrolMutation.isPending ? '归档中…' : `确认归档 ${patrolPreview.candidates.length} 个候选`}
+                  {patrolMutation.isPending ? t('ops.health.archiving') : t('ops.health.confirmArchive', { count: patrolPreview.candidates.length })}
                 </Button>
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setPatrolPreview(null)}>
-                  取消
+                  {t('ops.health.cancel')}
                 </Button>
               </div>
             </div>
           )}
           {report.risk_cases.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              全部知识案例健康，无红 / 黄分级案例。
+              {t('ops.health.noRiskCases')}
             </p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[1000px] text-left text-xs">
                 <thead>
                   <tr className="border-b text-muted-foreground">
-                    <th className="py-2 pr-3 font-medium">健康度</th>
-                    <th className="py-2 pr-3 font-medium">案例</th>
-                    <th className="py-2 pr-3 font-medium">服务 / 错误类型</th>
-                    <th className="py-2 pr-3 font-medium">状态 / 版本</th>
-                    <th className="py-2 pr-3 font-medium">反馈分</th>
-                    <th className="py-2 pr-3 font-medium">年龄</th>
-                    <th className="py-2 pr-3 font-medium">同步</th>
-                    <th className="py-2 pr-3 font-medium">内容风险</th>
-                    <th className="py-2 pr-3 font-medium">命中原因</th>
-                    <th className="py-2 font-medium">处置</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thHealth')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thCase')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thService')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thStatus')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thFeedback')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thAge')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thSync')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thContentRisk')}</th>
+                    <th className="py-2 pr-3 font-medium">{t('ops.health.thReasons')}</th>
+                    <th className="py-2 font-medium">{t('ops.health.thAction')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -508,16 +486,16 @@ function KbHealthTab() {
                         {c.status} <span className="text-muted-foreground">v{c.version ?? 0}</span>
                       </td>
                       <td className="py-2.5 pr-3">{c.feedback_score ?? '—'}</td>
-                      <td className="py-2.5 pr-3">{c.age_days !== null ? `${c.age_days} 天` : '—'}</td>
+                      <td className="py-2.5 pr-3">{c.age_days !== null ? t('ops.health.daysUnit', { n: c.age_days }) : '—'}</td>
                       <td className="py-2.5 pr-3">
                         {c.sync_dead > 0 ? (
-                          <span className="text-red-600 dark:text-red-400">死信 {c.sync_dead}</span>
+                          <span className="text-red-600 dark:text-red-400">{t('ops.health.deadLabel', { count: c.sync_dead })}</span>
                         ) : c.sync_pending > 0 ? (
-                          <span className="text-amber-600 dark:text-amber-400">待重试 {c.sync_pending}</span>
+                          <span className="text-amber-600 dark:text-amber-400">{t('ops.health.pendingLabel', { count: c.sync_pending })}</span>
                         ) : c.sync_verified ? (
-                          <span className="text-teal-600 dark:text-teal-400">已确认</span>
+                          <span className="text-teal-600 dark:text-teal-400">{t('ops.health.verifiedLabel')}</span>
                         ) : (
-                          <span className="text-amber-600 dark:text-amber-400">未确认</span>
+                          <span className="text-amber-600 dark:text-amber-400">{t('ops.health.unverifiedLabel')}</span>
                         )}
                       </td>
                       <td className="py-2.5 pr-3">
@@ -581,139 +559,97 @@ const AGENT_PROVIDER_SELECT_KEYS = new Set([
 ]);
 const INHERIT_SENTINEL = '__inherit__';
 
-const SELECT_OPTIONS: Record<string, { value: string; label: string }[]> = {
+/** 下拉选项：labelKey 指向 i18n 文案键 */
+const SELECT_OPTIONS: Record<string, { value: string; labelKey: string }[]> = {
   llm_provider: [
-    { value: 'atoms_hub', label: '平台内置 AIHub' },
-    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+    { value: 'atoms_hub', labelKey: 'ops.config.selectOptions.atomsHub' },
+    { value: 'openai_compatible', labelKey: 'ops.config.selectOptions.openaiCompatible' },
   ],
   diagnose_llm_provider: [
-    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
-    { value: 'atoms_hub', label: '平台内置 AIHub' },
-    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+    { value: INHERIT_SENTINEL, labelKey: 'ops.config.selectOptions.inheritGlobal' },
+    { value: 'atoms_hub', labelKey: 'ops.config.selectOptions.atomsHub' },
+    { value: 'openai_compatible', labelKey: 'ops.config.selectOptions.openaiCompatible' },
   ],
   kb_governance_llm_provider: [
-    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
-    { value: 'atoms_hub', label: '平台内置 AIHub' },
-    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+    { value: INHERIT_SENTINEL, labelKey: 'ops.config.selectOptions.inheritGlobal' },
+    { value: 'atoms_hub', labelKey: 'ops.config.selectOptions.atomsHub' },
+    { value: 'openai_compatible', labelKey: 'ops.config.selectOptions.openaiCompatible' },
   ],
   oncall_llm_provider: [
-    { value: INHERIT_SENTINEL, label: '继承全局 llm_provider' },
-    { value: 'atoms_hub', label: '平台内置 AIHub' },
-    { value: 'openai_compatible', label: '自建 OpenAI 兼容接口' },
+    { value: INHERIT_SENTINEL, labelKey: 'ops.config.selectOptions.inheritGlobal' },
+    { value: 'atoms_hub', labelKey: 'ops.config.selectOptions.atomsHub' },
+    { value: 'openai_compatible', labelKey: 'ops.config.selectOptions.openaiCompatible' },
   ],
   approval_mode: [
-    { value: 'OFF', label: '免审直发（OFF）' },
-    { value: 'SINGLE_REVIEW', label: '单级审批' },
-    { value: 'MULTI_LEVEL', label: '多级审批' },
+    { value: 'OFF', labelKey: 'ops.config.selectOptions.approvalOff' },
+    { value: 'SINGLE_REVIEW', labelKey: 'ops.config.selectOptions.approvalSingle' },
+    { value: 'MULTI_LEVEL', labelKey: 'ops.config.selectOptions.approvalMulti' },
   ],
   default_role: [
-    { value: 'viewer', label: 'viewer（只读）' },
-    { value: 'operator', label: 'operator（运营）' },
-    { value: 'sre', label: 'sre（值班）' },
-    { value: 'approver', label: 'approver（审批）' },
-    { value: 'kb_admin', label: 'kb_admin（知识库管理员）' },
+    { value: 'viewer', labelKey: 'ops.config.selectOptions.roleViewer' },
+    { value: 'operator', labelKey: 'ops.config.selectOptions.roleOperator' },
+    { value: 'sre', labelKey: 'ops.config.selectOptions.roleSre' },
+    { value: 'approver', labelKey: 'ops.config.selectOptions.roleApprover' },
+    { value: 'kb_admin', labelKey: 'ops.config.selectOptions.roleKbAdmin' },
   ],
 };
 
-const LABELS: Record<string, string> = {
-  llm_provider: 'LLM 接入方式',
-  llm_base_url: 'LLM Base URL',
-  llm_api_key: 'LLM API Key',
-  llm_model: 'Chat 模型',
-  llm_temperature: '采样温度',
-  diagnose_temperature: '诊断采样温度',
-  diagnose_time_budget_seconds: '诊断时间预算（秒）',
-  diagnose_llm_model: '诊断 Agent 独立模型',
-  diagnose_llm_timeout_seconds: '诊断 Agent 超时（秒）',
-  kb_governance_llm_model: '治理 Agent 独立模型',
-  kb_governance_temperature: '治理 Agent 采样温度',
-  kb_governance_llm_timeout_seconds: '治理 Agent 超时（秒）',
-  oncall_llm_model: '值班 Agent 独立模型',
-  oncall_temperature: '值班 Agent 采样温度',
-  oncall_llm_timeout_seconds: '值班 Agent 超时（秒）',
-  diagnose_llm_provider: '诊断 Agent 接入方式',
-  diagnose_llm_base_url: '诊断 Agent Base URL',
-  diagnose_llm_api_key: '诊断 Agent API Key',
-  kb_governance_llm_provider: '治理 Agent 接入方式',
-  kb_governance_llm_base_url: '治理 Agent Base URL',
-  kb_governance_llm_api_key: '治理 Agent API Key',
-  oncall_llm_provider: '值班 Agent 接入方式',
-  oncall_llm_base_url: '值班 Agent Base URL',
-  oncall_llm_api_key: '值班 Agent API Key',
-  llm_timeout_seconds: '超时时间（秒）',
-  embedding_base_url: 'Embedding Base URL',
-  embedding_api_key: 'Embedding API Key',
-  embedding_model: 'Embedding 模型',
-  approval_mode: '审批模式',
-  confidence_threshold: '置信度阈值',
-  rerank_weight_json: '重排权重 JSON',
-  feature_flags_json: '功能开关 JSON',
-  default_role: '默认角色',
-  role_bindings_json: '角色绑定 JSON',
-};
-
-const CONFIG_GROUPS: { title: string; hint: string; keys: string[]; testable?: boolean; agent?: string }[] = [
+const CONFIG_GROUPS: { id: string; keys: string[]; testable?: boolean; agent?: string }[] = [
   {
-    title: 'LLM 模型接入（全局默认）',
-    hint: '三个 Agent 共享的默认模型与接入方式；Agent 未配置独立项时逐项继承这里的模型/温度/超时。切换为自建接口需填写 Base URL 与 API Key，保存后立即生效，无需重启。',
+    id: 'global',
     keys: ['llm_provider', 'llm_base_url', 'llm_api_key', 'llm_model', 'llm_temperature', 'llm_timeout_seconds'],
     testable: true,
   },
   {
-    title: '深度诊断 Agent 独立配置',
-    hint: '诊断 Agent 独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局）；诊断温度默认 0 保证重复诊断稳定，时间预算约束多轮推理总时长。',
+    id: 'diagnose',
     keys: ['diagnose_llm_provider', 'diagnose_llm_base_url', 'diagnose_llm_api_key', 'diagnose_llm_model', 'diagnose_llm_timeout_seconds', 'diagnose_temperature', 'diagnose_time_budget_seconds'],
     testable: true,
     agent: 'diagnose',
   },
   {
-    title: '知识治理 Agent 独立配置',
-    hint: '告警聚类 AI 起草使用的独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局），可为治理任务单独切换自建网关或更强/更省的模型。',
+    id: 'governance',
     keys: ['kb_governance_llm_provider', 'kb_governance_llm_base_url', 'kb_governance_llm_api_key', 'kb_governance_llm_model', 'kb_governance_temperature', 'kb_governance_llm_timeout_seconds'],
     testable: true,
     agent: 'kb_governance',
   },
   {
-    title: '值班 Agent 独立配置',
-    hint: 'ChatOps 值班报告生成使用的独立接入（Provider / Base URL / API Key）与模型/温度/超时（留空逐项继承全局），AI 失败自动降级为确定性统计报告。',
+    id: 'oncall',
     keys: ['oncall_llm_provider', 'oncall_llm_base_url', 'oncall_llm_api_key', 'oncall_llm_model', 'oncall_temperature', 'oncall_llm_timeout_seconds'],
     testable: true,
     agent: 'oncall',
   },
   {
-    title: 'Embedding 语义检索',
-    hint: '填写 Embedding 模型名后，诊断 RAG 将启用语义向量加分重排；Base URL / API Key 缺省回退 LLM 配置，调用失败自动降级。',
+    id: 'embedding',
     keys: ['embedding_base_url', 'embedding_api_key', 'embedding_model'],
   },
   {
-    title: '诊断与审批策略',
-    hint: '置信度低于阈值的诊断会标记低置信；重排权重 JSON 控制 RAG 案例召回排序（cosine/topology/time_decay/feedback）。',
+    id: 'policy',
     keys: ['approval_mode', 'confidence_threshold', 'rerank_weight_json'],
   },
   {
-    title: '系统配置',
-    hint: '角色绑定 JSON 为 email → role 映射；功能开关控制自动诊断与去重扫描。',
+    id: 'system',
     keys: ['feature_flags_json', 'default_role', 'role_bindings_json'],
   },
 ];
 
 function TestResultBox({ result }: { result: LlmTestResult }) {
+  const { t } = useTranslation();
   return (
     <div className="grid gap-2.5 rounded-md border bg-muted/40 p-3 text-xs lg:grid-cols-2">
       <div>
         <p className="flex flex-wrap items-center gap-1.5 font-medium">
           <Badge variant={result.chat.ok ? 'default' : 'destructive'} className="text-[10px]">
-            {result.chat.ok ? 'Chat 连通正常' : 'Chat 连通失败'}
+            {result.chat.ok ? t('ops.config.testResult.chatOk') : t('ops.config.testResult.chatFailed')}
           </Badge>
-          {result.chat.agent && <Badge variant="outline" className="text-[10px]">Agent: {result.chat.agent}</Badge>}
+          {result.chat.agent && <Badge variant="outline" className="text-[10px]">{t('ops.config.testResult.agentBadge', { agent: result.chat.agent })}</Badge>}
           {result.chat.access_source && (
             <Badge variant={result.chat.access_source === 'agent' ? 'default' : 'outline'} className="text-[10px]">
-              {result.chat.access_source === 'agent' ? 'Agent 独立配置生效' : '继承全局配置'}
+              {result.chat.access_source === 'agent' ? t('ops.config.testResult.sourceAgent') : t('ops.config.testResult.sourceGlobal')}
             </Badge>
           )}
           {result.chat.model && <span className="font-mono text-muted-foreground">{result.chat.model}</span>}
           {typeof result.chat.resolved_timeout_seconds === 'number' && (
-            <span className="text-muted-foreground">超时 {result.chat.resolved_timeout_seconds}s</span>
+            <span className="text-muted-foreground">{t('ops.config.testResult.timeoutLabel', { seconds: result.chat.resolved_timeout_seconds })}</span>
           )}
           {result.chat.resolved_base_url && (
             <span className="font-mono text-muted-foreground">{result.chat.resolved_base_url}</span>
@@ -721,7 +657,7 @@ function TestResultBox({ result }: { result: LlmTestResult }) {
           {typeof result.chat.latency_ms === 'number' && <span className="text-muted-foreground">{result.chat.latency_ms}ms</span>}
         </p>
         {result.chat.ok ? (
-          result.chat.sample && <p className="mt-1 text-muted-foreground">回复样例：{result.chat.sample}</p>
+          result.chat.sample && <p className="mt-1 text-muted-foreground">{t('ops.config.testResult.sampleReply', { sample: result.chat.sample })}</p>
         ) : (
           <p className="mt-1 break-all text-destructive">{result.chat.error}</p>
         )}
@@ -732,16 +668,16 @@ function TestResultBox({ result }: { result: LlmTestResult }) {
             variant={!result.embedding.enabled ? 'outline' : result.embedding.ok ? 'default' : 'destructive'}
             className="text-[10px]"
           >
-            {!result.embedding.enabled ? 'Embedding 未启用' : result.embedding.ok ? 'Embedding 连通正常' : 'Embedding 连通失败'}
+            {!result.embedding.enabled ? t('ops.config.testResult.embDisabled') : result.embedding.ok ? t('ops.config.testResult.embOk') : t('ops.config.testResult.embFailed')}
           </Badge>
           {result.embedding.model && <span className="font-mono text-muted-foreground">{result.embedding.model}</span>}
-          {typeof result.embedding.dims === 'number' && <span className="text-muted-foreground">{result.embedding.dims} 维</span>}
+          {typeof result.embedding.dims === 'number' && <span className="text-muted-foreground">{t('ops.config.testResult.dimsLabel', { dims: result.embedding.dims })}</span>}
           {result.embedding.enabled && typeof result.embedding.latency_ms === 'number' && (
             <span className="text-muted-foreground">{result.embedding.latency_ms}ms</span>
           )}
         </p>
         <p className="mt-1 break-all text-muted-foreground">
-          {result.embedding.ok ? '语义加分重排已启用' : result.embedding.error || result.embedding.note}
+          {result.embedding.ok ? t('ops.config.testResult.embEnabledNote') : result.embedding.error || result.embedding.note}
         </p>
       </div>
     </div>
@@ -749,6 +685,7 @@ function TestResultBox({ result }: { result: LlmTestResult }) {
 }
 
 function ConfigTab() {
+  const { t } = useTranslation();
   const perms = usePermissions();
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -761,10 +698,12 @@ function ConfigTab() {
     enabled: canManage,
   });
 
+  const labelFor = (key: string) => t(`ops.config.labels.${key}`, { defaultValue: key });
+
   const updateMutation = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => consoleApi.updateConfig(key, value),
     onSuccess: (res) => {
-      toast.success(`配置 ${res.key} 已保存并写入审计`);
+      toast.success(t('ops.config.toastSaved', { key: res.key }));
       setDrafts((s) => {
         const next = { ...s };
         delete next[res.key];
@@ -773,24 +712,24 @@ function ConfigTab() {
       queryClient.invalidateQueries({ queryKey: ['configs'] });
       queryClient.invalidateQueries({ queryKey: ['permissions'] });
     },
-    onError: (e) => toast.error(`保存失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.config.toastSaveFailed', { error: errDetail(e) })),
   });
 
   const testMutation = useMutation({
     mutationFn: (agent?: string) => consoleApi.testLlmConfig(agent),
     onSuccess: (res: LlmTestResult) => {
       setTestResult(res);
-      if (res.chat.ok) toast.success(`Chat 连通正常（${res.chat.model ?? '-'}）`);
-      else toast.error(`Chat 连通失败：${res.chat.error ?? '未知错误'}`);
+      if (res.chat.ok) toast.success(t('ops.config.toastChatOk', { model: res.chat.model ?? '-' }));
+      else toast.error(t('ops.config.toastChatFailed', { error: res.chat.error ?? t('ops.config.unknownError') }));
     },
-    onError: (e) => toast.error(`测试失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('ops.config.toastTestFailed', { error: errDetail(e) })),
   });
 
   if (!canManage) {
     return (
       <EmptyBlock
-        title="配置中心仅对系统管理员开放"
-        hint={`当前角色「${perms?.role_label ?? '未知'}」无配置管理权限；请使用系统管理员账号（如演示账号 demo-admin@atoms.dev）登录后操作。`}
+        title={t('ops.config.noAccessTitle')}
+        hint={t('ops.config.noAccessHint', { role: perms?.role_label ?? t('ops.config.unknownError') })}
       />
     );
   }
@@ -798,7 +737,7 @@ function ConfigTab() {
   if (query.isError) {
     return (
       <EmptyBlock
-        title="配置加载失败"
+        title={t('ops.config.loadFailedTitle')}
         hint={errDetail(query.error)}
       />
     );
@@ -810,15 +749,14 @@ function ConfigTab() {
   return (
     <div className="space-y-4">
       <p className="text-xs text-muted-foreground">
-        模型接入、诊断策略与审批模式等全局配置；修改后立即生效并写入审计日志。
-        API Key 加密存储、脱敏展示（永不明文回显），输入新值替换、留空保存即清除；Agent 独立配置留空保存即继承全局。
-        {!canManage && ` 当前角色（${perms?.role_label}）为只读。`}
+        {t('ops.config.intro')}
+        {!canManage && ` ${t('ops.config.readOnlySuffix', { role: perms?.role_label })}`}
       </p>
       {CONFIG_GROUPS.map((group) => (
-        <Card key={group.title}>
+        <Card key={group.id}>
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm">
-              {group.title}
+              {t(`ops.config.groups.${group.id}.title`)}
               {group.testable && (
                 <Button
                   size="sm"
@@ -828,13 +766,13 @@ function ConfigTab() {
                   onClick={() => testMutation.mutate(group.agent)}
                 >
                   <Activity className="mr-1 h-3.5 w-3.5" />
-                  {testMutation.isPending ? '测试中…' : '测试连通性'}
+                  {testMutation.isPending ? t('ops.config.testing') : t('ops.config.testBtn')}
                 </Button>
               )}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground">{group.hint}</p>
+            <p className="text-xs text-muted-foreground">{t(`ops.config.groups.${group.id}.hint`)}</p>
             {group.testable && testResult && group.agent === testResult.chat.agent && (
               <TestResultBox result={testResult} />
             )}
@@ -853,20 +791,20 @@ function ConfigTab() {
                 const options = SELECT_OPTIONS[key];
                 const placeholder = isSecret
                   ? cfg.value
-                    ? `${cfg.value}（已配置，输入新值替换）`
+                    ? t('ops.config.secretConfigured', { value: cfg.value })
                     : isInherit
-                      ? '未配置（留空继承全局）'
-                      : '未配置'
+                      ? t('ops.config.inheritNotConfigured')
+                      : t('ops.config.secretNotConfigured')
                   : isInherit && !cfg.value
-                    ? '留空继承全局'
+                    ? t('ops.config.inheritPlaceholder')
                     : '';
                 return (
                   <div key={key} className="flex flex-col gap-1.5 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3">
                     <div className="sm:w-60 sm:shrink-0">
                       <p className="flex flex-wrap items-center gap-1.5 text-xs font-medium">
                         {isSecret && <KeyRound className="h-3 w-3 text-muted-foreground" />}
-                        {LABELS[key] ?? key}
-                        {cfg.is_default && <Badge variant="outline" className="text-[10px]">默认值</Badge>}
+                        {labelFor(key)}
+                        {cfg.is_default && <Badge variant="outline" className="text-[10px]">{t('ops.config.defaultValueBadge')}</Badge>}
                       </p>
                       <p className="font-mono text-[10px] text-muted-foreground">{key}</p>
                       <p className="text-[11px] leading-snug text-muted-foreground">{cfg.description}</p>
@@ -884,7 +822,7 @@ function ConfigTab() {
                           <SelectContent>
                             {options.map((o) => (
                               <SelectItem key={o.value} value={o.value} className="text-xs">
-                                {o.label}
+                                {t(o.labelKey)}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -907,12 +845,12 @@ function ConfigTab() {
                           className="h-9 shrink-0 text-xs text-muted-foreground"
                           disabled={!canManage || updateMutation.isPending}
                           onClick={() => {
-                            if (window.confirm(`确定清除 ${LABELS[key] ?? key}？${isInherit ? '清除后继承全局同名配置。' : '清除后相关能力回退默认配置。'}`)) {
+                            if (window.confirm(isInherit ? t('ops.config.confirmClearInherit', { label: labelFor(key) }) : t('ops.config.confirmClearGlobal', { label: labelFor(key) }))) {
                               updateMutation.mutate({ key, value: '' });
                             }
                           }}
                         >
-                          清除
+                          {t('ops.config.clearBtn')}
                         </Button>
                       )}
                       <Button
@@ -922,7 +860,7 @@ function ConfigTab() {
                         onClick={() => updateMutation.mutate({ key, value: savedValue })}
                       >
                         <Save className="mr-1.5 h-3.5 w-3.5" />
-                        {updateMutation.isPending ? '保存中…' : '保存'}
+                        {updateMutation.isPending ? t('ops.config.saving') : t('ops.config.save')}
                       </Button>
                     </div>
                   </div>
@@ -937,16 +875,17 @@ function ConfigTab() {
 }
 
 export default function OpsPage() {
+  const { t } = useTranslation();
   const perms = usePermissions();
   const canManageConfig = !!perms?.can_manage_config;
   // 审计与配置整页仅系统管理员可见（侧边栏入口同步隐藏，防止直达 URL 访问）
   if (!canManageConfig) {
     return (
       <div className="space-y-4">
-        <h1 className="text-lg font-semibold tracking-tight">审计与配置</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t('ops.title')}</h1>
         <EmptyBlock
-          title="仅系统管理员可访问"
-          hint={`当前角色「${perms?.role_label ?? '未知'}」无权限查看审计日志与配置中心。`}
+          title={t('ops.noAccessTitle')}
+          hint={t('ops.noAccessHint', { role: perms?.role_label ?? t('ops.config.unknownError') })}
         />
       </div>
     );
@@ -954,16 +893,16 @@ export default function OpsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-lg font-semibold tracking-tight">审计与配置</h1>
+        <h1 className="text-lg font-semibold tracking-tight">{t('ops.title')}</h1>
         <p className="mt-0.5 text-sm text-muted-foreground">
-          全操作审计链路可追溯（含 before/after 快照），配置中心支持 LLM/Embedding 动态接入与密钥安全管理。
+          {t('ops.subtitle')}
         </p>
       </div>
       <Tabs defaultValue="audit">
         <TabsList>
-          <TabsTrigger value="audit">审计日志</TabsTrigger>
-          <TabsTrigger value="kb-health">知识健康报表</TabsTrigger>
-          {canManageConfig && <TabsTrigger value="config">配置中心</TabsTrigger>}
+          <TabsTrigger value="audit">{t('ops.tabAudit')}</TabsTrigger>
+          <TabsTrigger value="kb-health">{t('ops.tabKbHealth')}</TabsTrigger>
+          {canManageConfig && <TabsTrigger value="config">{t('ops.tabConfig')}</TabsTrigger>}
         </TabsList>
         <TabsContent value="audit" className="mt-4">
           <AuditTab />

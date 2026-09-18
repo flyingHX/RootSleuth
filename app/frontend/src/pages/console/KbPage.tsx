@@ -1,6 +1,7 @@
 /** C6/C7 知识库：案例检索与编辑审批、版本回滚、变更记录 diff、去重合并。 */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { GitMerge, PencilLine, Plus, ScanSearch, ScrollText, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -59,15 +60,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 const EDITABLE_FIELDS = ['alert_template', 'root_cause', 'solution', 'cluster', 'topology_snapshot'] as const;
-const FIELD_LABELS: Record<string, string> = {
-  alert_template: '告警模板',
-  root_cause: '根因',
-  solution: '处置方案',
-  cluster: '集群',
-  topology_snapshot: '拓扑快照',
-  error_type: '错误类型',
-  service_name: '服务名',
-};
 
 /** 案例关联告警实例日志列表（案例详情 / 新建案例预览共用）。 */
 function EventSampleList({
@@ -79,11 +71,12 @@ function EventSampleList({
   loading?: boolean;
   emptyHint?: string;
 }) {
-  if (loading) return <SpinnerLine text="加载实例日志…" />;
+  const { t } = useTranslation();
+  if (loading) return <SpinnerLine text={t('kb.sampleList.loading')} />;
   if (events.length === 0) {
     return (
       <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        {emptyHint ?? '暂无关联实例日志'}
+        {emptyHint ?? t('kb.sampleList.empty')}
       </p>
     );
   }
@@ -117,13 +110,13 @@ function OverrideBlock({ scan, idPrefix, allow, onAllow, reason, onReason }: {
   reason: string;
   onReason: (v: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-2.5">
-      <ContentScanCard scan={scan} title="内容安全扫描（已拦截）" />
+      <ContentScanCard scan={scan} title={t('kb.override.scanTitle')} />
       <div className="rounded-md border bg-secondary/40 p-3">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          高风险命中（密钥、私钥、危险命令、注入等）会阻止发布。若确认属于误报（例如演练样本、脱敏演示数据），
-          请填写放行理由后重新提交；放行操作与理由将写入审计日志供事后追溯。
+          {t('kb.override.description')}
         </p>
         <RadioGroup
           className="mt-2.5 flex flex-wrap gap-4"
@@ -132,17 +125,17 @@ function OverrideBlock({ scan, idPrefix, allow, onAllow, reason, onReason }: {
         >
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="blocked" id={`${idPrefix}-keep-blocked`} />
-            <Label htmlFor={`${idPrefix}-keep-blocked`} className="text-xs">保持拦截，稍后修改内容</Label>
+            <Label htmlFor={`${idPrefix}-keep-blocked`} className="text-xs">{t('kb.override.keepBlocked')}</Label>
           </div>
           <div className="flex items-center space-x-2">
             <RadioGroupItem value="override" id={`${idPrefix}-allow-override`} />
-            <Label htmlFor={`${idPrefix}-allow-override`} className="text-xs">确认为误报，放行提交</Label>
+            <Label htmlFor={`${idPrefix}-allow-override`} className="text-xs">{t('kb.override.allowOverride')}</Label>
           </div>
         </RadioGroup>
         {allow && (
           <Input
             className="mt-2.5 h-9 text-xs"
-            placeholder="放行理由（必填，写入审计），例如：根因中的 Token 为演练样本"
+            placeholder={t('kb.override.reasonPlaceholder')}
             value={reason}
             onChange={(e) => onReason(e.target.value)}
           />
@@ -153,9 +146,11 @@ function OverrideBlock({ scan, idPrefix, allow, onAllow, reason, onReason }: {
 }
 
 function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: () => void }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const perms = usePermissions();
   const isCreate = false;
+  const fieldLabel = (f: string) => t(`kb.fields.${f}`, { defaultValue: f });
   const [form, setForm] = useState<Record<string, string>>(() =>
     Object.fromEntries(EDITABLE_FIELDS.map((f) => [f, (detail.case as unknown as Record<string, string>)[f] ?? ''])),
   );
@@ -167,7 +162,7 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
 
   const changedEntries: DiffEntry[] = EDITABLE_FIELDS.filter((f) => form[f] !== ((detail.case as unknown as Record<string, string>)[f] ?? '')).map(
     (f) => ({
-      key: FIELD_LABELS[f],
+      key: fieldLabel(f),
       before: (detail.case as unknown as Record<string, string>)[f] ?? '',
       after: form[f],
     }),
@@ -187,12 +182,15 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
       }),
     onSuccess: (res) => {
       if (res.content_scan && res.content_scan.hits.length > 0) {
-        toast.info(`变更已提交，内容安全扫描命中 ${res.content_scan.hits.length} 处（${res.content_scan.risk_level === 'high' ? '已误报放行' : '低风险留痕'}），明细见审批单`);
+        toast.info(t('kb.edit.scanHitToast', {
+          count: res.content_scan.hits.length,
+          level: res.content_scan.risk_level === 'high' ? t('kb.scan.overrideLevel') : t('kb.scan.lowRiskLevel'),
+        }));
       }
       toast.success(
         res.auto_published
-          ? `变更已发布，案例 ${detail.case.case_id} 更新到 v${res.change_set.version}`
-          : `变更集已创建并提交审批（单号 #${res.approval_request_id}），通过后自动发布`,
+          ? t('kb.edit.publishedToast', { caseId: detail.case.case_id, version: res.change_set.version })
+          : t('kb.edit.approvalToast', { id: res.approval_request_id }),
       );
       queryClient.invalidateQueries({ queryKey: ['kb-case', detail.case.case_id] });
       queryClient.invalidateQueries({ queryKey: ['kb-cases'] });
@@ -206,9 +204,9 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
         setGuardScan(scan);
         setAllowOverride(false);
         setOverrideReason('');
-        toast.error('内容安全扫描已拦截本次变更，请确认是否误报放行', { duration: 8000 });
+        toast.error(t('kb.edit.blockedToast'), { duration: 8000 });
       } else {
-        toast.error(`提交变更失败：${errDetail(e)}`);
+        toast.error(t('kb.edit.errorToast', { error: errDetail(e) }));
       }
     },
   });
@@ -223,15 +221,22 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
   return (
     <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
       <DialogHeader>
-        <DialogTitle>{isCreate ? '新建知识案例' : `编辑案例：${detail.case.case_id}`}</DialogTitle>
+        <DialogTitle>{isCreate ? t('kb.create.title') : t('kb.edit.title', { caseId: detail.case.case_id })}</DialogTitle>
         <DialogDescription>
-          当前版本 v{detail.case.version ?? 1}。变更按审批模式「{perms?.approval_mode === 'OFF' ? '免审直发' : perms?.approval_mode === 'SINGLE_REVIEW' ? '单级审批' : '多级审批'}」处理，全部操作写入审计日志。
+          {t('kb.edit.versionLine', {
+            version: detail.case.version ?? 1,
+            mode: perms?.approval_mode === 'OFF'
+              ? t('layout.approvalMode.OFF')
+              : perms?.approval_mode === 'SINGLE_REVIEW'
+                ? t('layout.approvalMode.SINGLE_REVIEW')
+                : t('layout.approvalMode.MULTI_LEVEL'),
+          })}
         </DialogDescription>
       </DialogHeader>
       <div className="space-y-3">
         {EDITABLE_FIELDS.map((f) => (
           <div key={f}>
-            <Label className="mb-1 text-xs">{FIELD_LABELS[f]}</Label>
+            <Label className="mb-1 text-xs">{fieldLabel(f)}</Label>
             {f === 'root_cause' || f === 'solution' || f === 'alert_template' || f === 'topology_snapshot' ? (
               <Textarea
                 className="min-h-16 font-mono text-xs"
@@ -248,17 +253,17 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
           </div>
         ))}
         <div>
-          <Label className="mb-1 text-xs">变更理由（必填）</Label>
+          <Label className="mb-1 text-xs">{t('kb.edit.reasonLabel')}</Label>
           <Input
             className="h-9 text-xs"
-            placeholder="例如：新增网关升级后的根因与处置步骤"
+            placeholder={t('kb.edit.reasonPlaceholder')}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
           />
         </div>
         {changedEntries.length > 0 && (
           <div>
-            <p className="mb-1.5 text-xs font-medium text-muted-foreground">变更预览</p>
+            <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('kb.edit.previewLabel')}</p>
             <DiffTable entries={changedEntries} />
           </div>
         )}
@@ -274,10 +279,10 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
         )}
       </div>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>取消</Button>
+        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>{t('kb.actions.cancel')}</Button>
         <Button onClick={() => mutation.mutate()} disabled={disabled}>
           <PencilLine className="mr-1.5 h-3.5 w-3.5" />
-          {mutation.isPending ? '提交中…' : guardScan && allowOverride ? '放行并提交' : '提交变更'}
+          {mutation.isPending ? t('kb.actions.submitting') : guardScan && allowOverride ? t('kb.edit.submitOverride') : t('kb.edit.submit')}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -285,6 +290,7 @@ function EditCaseDialog({ detail, onClose }: { detail: KbCaseDetail; onClose: ()
 }
 
 function CreateCaseDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   // 新建案例与案例库保持完整字段结构：error_type/service_name 必填，其余可留空
   const [form, setForm] = useState({
@@ -328,12 +334,15 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
     onSuccess: (res) => {
       const caseId = res.change_set.case_id;
       if (res.content_scan && res.content_scan.hits.length > 0) {
-        toast.info(`内容安全扫描命中 ${res.content_scan.hits.length} 处（${res.content_scan.risk_level === 'high' ? '已误报放行' : '低风险留痕'}），明细见审批单`);
+        toast.info(t('kb.create.scanHitToast', {
+          count: res.content_scan.hits.length,
+          level: res.content_scan.risk_level === 'high' ? t('kb.scan.overrideLevel') : t('kb.scan.lowRiskLevel'),
+        }));
       }
       toast.success(
         res.auto_published
-          ? `案例 ${caseId} 已创建并发布`
-          : `新建变更集已提交审批（单号 #${res.approval_request_id}），案例 ID 自动生成：${caseId}`,
+          ? t('kb.create.publishedToast', { caseId })
+          : t('kb.create.approvalToast', { id: res.approval_request_id, caseId }),
       );
       queryClient.invalidateQueries({ queryKey: ['kb-cases'] });
       queryClient.invalidateQueries({ queryKey: ['change-sets'] });
@@ -346,9 +355,9 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
         setGuardScan(scan);
         setAllowOverride(false);
         setOverrideReason('');
-        toast.error('内容安全扫描已拦截本次创建，请确认是否误报放行', { duration: 8000 });
+        toast.error(t('kb.create.blockedToast'), { duration: 8000 });
       } else {
-        toast.error(`创建失败：${errDetail(e)}`);
+        toast.error(t('kb.create.errorToast', { error: errDetail(e) }));
       }
     },
   });
@@ -361,16 +370,15 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
   return (
     <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
       <DialogHeader>
-        <DialogTitle>新建知识案例</DialogTitle>
-        <DialogDescription>创建后按审批模式进入审批流或直接发布，写入版本与审计。</DialogDescription>
+        <DialogTitle>{t('kb.create.title')}</DialogTitle>
+        <DialogDescription>{t('kb.create.description')}</DialogDescription>
       </DialogHeader>
       <div className="space-y-3">
         <p className="rounded-md bg-muted/50 px-3 py-2 text-xs leading-relaxed text-muted-foreground">
-          案例 ID 无需手工填写：提交后由系统按 <span className="font-mono">KB-日期-当日序号</span> 规则自动生成并保证唯一；
-          审批中心将展示该新建案例的案例库完整字段视图（未填写字段标注「未填写」）与关联日志实例证据。
+          {t('kb.create.idHintBefore')} <span className="font-mono">{t('kb.create.idRule')}</span> {t('kb.create.idHintAfter')}
         </p>
         <div>
-          <Label className="mb-1 text-xs">错误类型（必填）</Label>
+          <Label className="mb-1 text-xs">{t('kb.create.errorTypeRequired')}</Label>
           <Input
             className="h-9 font-mono text-xs"
             placeholder="gateway_502"
@@ -379,7 +387,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">服务名（必填）</Label>
+          <Label className="mb-1 text-xs">{t('kb.create.serviceRequired')}</Label>
           <Input
             className="h-9 font-mono text-xs"
             placeholder="payment-service"
@@ -388,7 +396,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">集群</Label>
+          <Label className="mb-1 text-xs">{t('kb.fields.cluster')}</Label>
           <Input
             className="h-9 text-xs"
             placeholder="prod-cluster-01"
@@ -397,7 +405,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">告警模板</Label>
+          <Label className="mb-1 text-xs">{t('kb.fields.alert_template')}</Label>
           <Textarea
             className="min-h-16 font-mono text-xs"
             placeholder="upstream sent too big header while reading response header from upstream"
@@ -406,7 +414,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">根因</Label>
+          <Label className="mb-1 text-xs">{t('kb.fields.root_cause')}</Label>
           <Textarea
             className="min-h-16 text-xs"
             value={form.root_cause}
@@ -414,7 +422,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">处置方案</Label>
+          <Label className="mb-1 text-xs">{t('kb.fields.solution')}</Label>
           <Textarea
             className="min-h-16 text-xs"
             value={form.solution}
@@ -422,7 +430,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
           />
         </div>
         <div>
-          <Label className="mb-1 text-xs">拓扑快照</Label>
+          <Label className="mb-1 text-xs">{t('kb.fields.topology_snapshot')}</Label>
           <Textarea
             className="min-h-16 font-mono text-xs"
             placeholder="ingress → gateway(payment) → payment-api → mysql"
@@ -432,7 +440,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
         </div>
         <div>
           <div className="mb-1 flex items-center justify-between">
-            <Label className="text-xs">关联实例日志（证据参考，不入库）</Label>
+            <Label className="text-xs">{t('kb.create.evidenceLabel')}</Label>
             <Button
               variant="outline"
               size="sm"
@@ -441,23 +449,23 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
               onClick={() => setEvidenceOpen(true)}
             >
               <ScrollText className="mr-1 h-3 w-3" />
-              {evidenceOpen ? '刷新预览' : '查询关联日志'}
+              {evidenceOpen ? t('kb.create.refreshPreview') : t('kb.create.queryLogs')}
             </Button>
           </div>
           {!evidenceOpen ? (
             <p className="text-xs text-muted-foreground">
-              填写告警模板或服务名后，可查询告警库中匹配的实例日志作为证据参考。
+              {t('kb.create.evidenceHint')}
             </p>
           ) : (
             <EventSampleList
               loading={evidenceQuery.isFetching}
               events={evidenceQuery.data?.items ?? []}
-              emptyHint="未找到匹配的实例日志（按告警模板精确匹配优先、服务名兜底）"
+              emptyHint={t('kb.create.evidenceEmpty')}
             />
           )}
         </div>
         <div>
-          <Label className="mb-1 text-xs">变更理由（必填）</Label>
+          <Label className="mb-1 text-xs">{t('kb.create.reasonLabel')}</Label>
           <Input
             className="h-9 text-xs"
             value={reason}
@@ -476,9 +484,9 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
         )}
       </div>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>取消</Button>
+        <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>{t('kb.actions.cancel')}</Button>
         <Button onClick={() => mutation.mutate()} disabled={!valid || mutation.isPending}>
-          {mutation.isPending ? '提交中…' : guardScan && allowOverride ? '放行并创建' : '创建案例'}
+          {mutation.isPending ? t('kb.actions.submitting') : guardScan && allowOverride ? t('kb.create.submitOverride') : t('kb.create.submit')}
         </Button>
       </DialogFooter>
     </DialogContent>
@@ -488,6 +496,7 @@ function CreateCaseDialog({ onClose }: { onClose: () => void }) {
 // ------------------ 案例详情对话框 ------------------
 
 function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => void }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const perms = usePermissions();
   const [editOpen, setEditOpen] = useState(false);
@@ -499,12 +508,12 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
   const rollbackMutation = useMutation({
     mutationFn: (version: number) => consoleApi.rollbackCase(caseId, version),
     onSuccess: (res) => {
-      toast.success(`案例已回滚，生成新版本 v${res.version}`);
+      toast.success(t('kb.detail.rollbackToast', { version: res.version }));
       queryClient.invalidateQueries({ queryKey: ['kb-case', caseId] });
       queryClient.invalidateQueries({ queryKey: ['kb-cases'] });
       queryClient.invalidateQueries({ queryKey: ['change-sets'] });
     },
-    onError: (e) => toast.error(`回滚失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('kb.detail.rollbackErrorToast', { error: errDetail(e) })),
   });
 
   const canRollback = (perms?.level ?? 0) >= 3; // kb_admin 及以上
@@ -524,7 +533,7 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
         </DialogTitle>
         <DialogDescription>
           {detailQuery.data?.case.error_type} · {detailQuery.data?.case.service_name}
-          {detailQuery.data?.case.cluster ? ` · ${detailQuery.data.case.cluster}` : ''} · 反馈分 {detailQuery.data?.case.feedback_score ?? 0}
+          {detailQuery.data?.case.cluster ? ` · ${detailQuery.data.case.cluster}` : ''} · {t('kb.detail.feedback', { score: detailQuery.data?.case.feedback_score ?? 0 })}
         </DialogDescription>
       </DialogHeader>
 
@@ -539,29 +548,29 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
               <div className="flex items-center gap-2">
                 <Button size="sm" onClick={() => setEditOpen(true)}>
                   <PencilLine className="mr-1.5 h-3.5 w-3.5" />
-                  编辑案例
+                  {t('kb.detail.edit')}
                 </Button>
               </div>
             )}
 
             <div>
-              <p className="mb-1.5 text-sm font-semibold">当前内容</p>
+              <p className="mb-1.5 text-sm font-semibold">{t('kb.detail.currentContent')}</p>
               <div className="space-y-2 text-xs">
                 <div>
-                  <p className="font-medium text-muted-foreground">告警模板</p>
-                  <pre className="log-block">{detailQuery.data.case.alert_template || '（无）'}</pre>
+                  <p className="font-medium text-muted-foreground">{t('kb.fields.alert_template')}</p>
+                  <pre className="log-block">{detailQuery.data.case.alert_template || t('kb.detail.none')}</pre>
                 </div>
                 <div>
-                  <p className="font-medium text-muted-foreground">根因</p>
-                  <pre className="log-block">{detailQuery.data.case.root_cause || '（无）'}</pre>
+                  <p className="font-medium text-muted-foreground">{t('kb.fields.root_cause')}</p>
+                  <pre className="log-block">{detailQuery.data.case.root_cause || t('kb.detail.none')}</pre>
                 </div>
                 <div>
-                  <p className="font-medium text-muted-foreground">处置方案</p>
-                  <pre className="log-block">{detailQuery.data.case.solution || '（无）'}</pre>
+                  <p className="font-medium text-muted-foreground">{t('kb.fields.solution')}</p>
+                  <pre className="log-block">{detailQuery.data.case.solution || t('kb.detail.none')}</pre>
                 </div>
                 {detailQuery.data.case.topology_snapshot && (
                   <div>
-                    <p className="font-medium text-muted-foreground">拓扑快照</p>
+                    <p className="font-medium text-muted-foreground">{t('kb.fields.topology_snapshot')}</p>
                     <pre className="log-block">{detailQuery.data.case.topology_snapshot}</pre>
                   </div>
                 )}
@@ -571,25 +580,25 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
             <Separator />
 
             <div>
-              <p className="mb-1.5 text-sm font-semibold">关联实例日志（{detailQuery.data.related_events?.length ?? 0}）</p>
+              <p className="mb-1.5 text-sm font-semibold">{t('kb.detail.relatedEvents', { count: detailQuery.data.related_events?.length ?? 0 })}</p>
               <EventSampleList
                 events={detailQuery.data.related_events ?? []}
-                emptyHint="暂无与该案例告警模板 / 服务名匹配的实例日志"
+                emptyHint={t('kb.detail.relatedEventsEmpty')}
               />
             </div>
 
             <Separator />
 
             <div>
-              <p className="mb-1.5 text-sm font-semibold">版本历史（{detailQuery.data.versions.length}）</p>
+              <p className="mb-1.5 text-sm font-semibold">{t('kb.detail.versions', { count: detailQuery.data.versions.length })}</p>
               <ul className="space-y-1.5">
                 {detailQuery.data.versions.map((v) => (
                   <li key={v.id} className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs">
                     <Badge variant={v.version === detailQuery.data?.case.version ? 'default' : 'outline'}>
                       v{v.version}
-                      {v.version === detailQuery.data?.case.version ? '（当前）' : ''}
+                      {v.version === detailQuery.data?.case.version ? t('kb.detail.currentBadge') : ''}
                     </Badge>
-                    <span className="text-muted-foreground">{v.created_by || '系统'}</span>
+                    <span className="text-muted-foreground">{v.created_by || t('kb.detail.system')}</span>
                     <span className="text-muted-foreground">{fmtTime(v.created_at)}</span>
                     {v.version !== detailQuery.data?.case.version && canRollback && (
                       <Button
@@ -600,7 +609,7 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
                         disabled={rollbackMutation.isPending}
                       >
                         <Undo2 className="mr-1 h-3 w-3" />
-                        回滚到此版本
+                        {t('kb.detail.rollback')}
                       </Button>
                     )}
                   </li>
@@ -611,25 +620,25 @@ function CaseDetailDialog({ caseId, onClose }: { caseId: string; onClose: () => 
             <Separator />
 
             <div>
-              <p className="mb-1.5 text-sm font-semibold">变更记录（{detailQuery.data.change_sets.length}）</p>
+              <p className="mb-1.5 text-sm font-semibold">{t('kb.detail.changeSets', { count: detailQuery.data.change_sets.length })}</p>
               <ul className="space-y-2.5">
                 {detailQuery.data.change_sets.map((cs) => (
                   <li key={cs.id} className="rounded-md border p-3 text-xs">
                     <div className="flex flex-wrap items-center gap-2">
                       <StatusBadge status={cs.status} />
-                      <span className="font-medium">{cs.change_type === 'create' ? '新建' : '更新'}</span>
+                      <span className="font-medium">{cs.change_type === 'create' ? t('kb.page.changeCreate') : t('kb.page.changeUpdate')}</span>
                       {cs.version && <Badge variant="outline">v{cs.version}</Badge>}
                       <span className="text-muted-foreground">{cs.created_by}</span>
                       <span className="text-muted-foreground">{fmtTime(cs.created_at)}</span>
                     </div>
-                    {cs.reason && <p className="mt-1 text-muted-foreground">理由：{cs.reason}</p>}
+                    {cs.reason && <p className="mt-1 text-muted-foreground">{t('kb.page.reason', { reason: cs.reason })}</p>}
                     <div className="mt-2">
                       <DiffTable entries={diffEntries(cs.diff)} />
                     </div>
                   </li>
                 ))}
                 {detailQuery.data.change_sets.length === 0 && (
-                  <p className="text-xs text-muted-foreground">暂无变更记录</p>
+                  <p className="text-xs text-muted-foreground">{t('kb.page.noChangeSets')}</p>
                 )}
               </ul>
             </div>
@@ -665,6 +674,7 @@ function MergeGroupCard({
   onCreate: (master: string, merged: string[], reason: string) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const [master, setMaster] = useState(group.suggested_master);
   const [reason, setReason] = useState('');
   const [confirmCancel, setConfirmCancel] = useState(false);
@@ -681,20 +691,20 @@ function MergeGroupCard({
         <CardTitle className="flex flex-wrap items-center gap-2 text-sm">
           <span className="font-mono">{group.error_type}</span>
           <span className="font-normal text-muted-foreground">
-            {group.service_name} · {group.case_ids.length} 个相似案例
+            {group.service_name} · {t('kb.merge.similarCount', { count: group.case_ids.length })}
             {typeof group.min_pair_similarity === 'number' &&
-              ` · 组内最低相似度 ${Math.round(group.min_pair_similarity * 100)}%`}
+              ` · ${t('kb.merge.minSimilarity', { pct: Math.round(group.min_pair_similarity * 100) })}`}
           </span>
           {canMerge && (
             <Button
               variant="ghost"
               size="sm"
               className="ml-auto h-7 shrink-0 px-2 text-xs text-muted-foreground hover:text-destructive"
-              title="取消本组扫描结果的合并（案例库数据不受影响，可随时恢复）"
+              title={t('kb.merge.cancelTitle')}
               onClick={() => setConfirmCancel(true)}
             >
               <X className="mr-0.5 h-3 w-3" />
-              取消本次合并
+              {t('kb.merge.cancelBtn')}
             </Button>
           )}
         </CardTitle>
@@ -713,15 +723,15 @@ function MergeGroupCard({
               <div className="min-w-0 flex-1">
                 <p className="flex flex-wrap items-center gap-1.5">
                   <span className="font-mono font-medium">{c.case_id}</span>
-                  {c.case_id === group.suggested_master && <Badge variant="secondary">建议主案例（反馈分最高）</Badge>}
-                  <span className="text-muted-foreground">反馈分 {c.feedback_score ?? 0} · v{c.version}</span>
+                  {c.case_id === group.suggested_master && <Badge variant="secondary">{t('kb.merge.suggestedMaster')}</Badge>}
+                  <span className="text-muted-foreground">{t('kb.merge.feedbackVersion', { score: c.feedback_score ?? 0, version: c.version })}</span>
                   {c.case_id !== effectiveMaster && simPct(group, effectiveMaster, c.case_id) !== null && (
                     <Badge variant="outline" className="font-normal">
-                      与主案例相似度 {simPct(group, effectiveMaster, c.case_id)}%
+                      {t('kb.merge.similarityToMaster', { pct: simPct(group, effectiveMaster, c.case_id) })}
                     </Badge>
                   )}
                 </p>
-                <p className="mt-1 line-clamp-2 text-muted-foreground">{c.root_cause || '（无根因）'}</p>
+                <p className="mt-1 line-clamp-2 text-muted-foreground">{c.root_cause || t('kb.merge.noRootCause')}</p>
               </div>
             </label>
           ))}
@@ -730,7 +740,7 @@ function MergeGroupCard({
           <>
             <Input
               className="h-9 text-xs"
-              placeholder="合并理由（必填）：例如同一故障两次入库，合并保留反馈分最高的案例"
+              placeholder={t('kb.merge.reasonPlaceholder')}
               value={reason}
               onChange={(e) => setReason(e.target.value)}
             />
@@ -740,7 +750,7 @@ function MergeGroupCard({
               onClick={() => onCreate(effectiveMaster, merged, reason.trim())}
             >
               <GitMerge className="mr-1.5 h-3.5 w-3.5" />
-              合并到 {effectiveMaster}（归档 {merged.length} 个冗余案例）
+              {t('kb.merge.mergeTo', { master: effectiveMaster, count: merged.length })}
             </Button>
           </>
         )}
@@ -749,14 +759,14 @@ function MergeGroupCard({
       <AlertDialog open={confirmCancel} onOpenChange={setConfirmCancel}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>取消本次合并？</AlertDialogTitle>
+            <AlertDialogTitle>{t('kb.merge.confirmTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
-              将取消 {group.error_type}（{group.service_name}）这组相似案例的合并：取消后本组不参与本次合并，案例库数据不受影响，可随时在「已取消的扫描结果」区恢复。
+              {t('kb.merge.confirmDescription', { errorType: group.error_type, service: group.service_name })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>继续合并</AlertDialogCancel>
-            <AlertDialogAction onClick={() => onCancel()}>取消本次合并</AlertDialogAction>
+            <AlertDialogCancel>{t('kb.merge.keepMerging')}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => onCancel()}>{t('kb.merge.confirmCancel')}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -765,6 +775,7 @@ function MergeGroupCard({
 }
 
 function MergeTab() {
+  const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const perms = usePermissions();
   const canMerge = !!perms?.can_edit_kb;
@@ -787,15 +798,15 @@ function MergeTab() {
     onSuccess: (res) => {
       toast.success(
         res.auto_merged
-          ? '合并已自动执行（免审模式），冗余案例已归档'
-          : `合并提案已提交审批（单号 #${res.approval_request_id}）`,
+          ? t('kb.merge.autoMergedToast')
+          : t('kb.merge.approvalToast', { id: res.approval_request_id }),
       );
       queryClient.invalidateQueries({ queryKey: ['merge-proposals'] });
       queryClient.invalidateQueries({ queryKey: ['kb-duplicates'] });
       queryClient.invalidateQueries({ queryKey: ['kb-cases'] });
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
     },
-    onError: (e) => toast.error(`创建合并提案失败：${errDetail(e)}`),
+    onError: (e) => toast.error(t('kb.merge.errorToast', { error: errDetail(e) })),
   });
 
   const groups = scanQuery.data?.groups ?? [];
@@ -818,10 +829,10 @@ function MergeTab() {
       <div className="flex flex-wrap items-center gap-2.5">
         <Button size="sm" variant="outline" onClick={() => setScanEnabled(true)} disabled={scanQuery.isFetching}>
           <ScanSearch className="mr-1.5 h-3.5 w-3.5" />
-          {scanQuery.isFetching ? '扫描中…' : '扫描相似案例'}
+          {scanQuery.isFetching ? t('kb.merge.scanning') : t('kb.merge.scanBtn')}
         </Button>
         <span className="text-xs text-muted-foreground">
-          按同错误类型 + 同服务且模板相似度 ≥80% 聚类，仅展示相似度达标的合并建议；合并后冗余案例归档，全部写入审计。
+          {t('kb.merge.scanHint')}
         </span>
       </div>
 
@@ -831,22 +842,22 @@ function MergeTab() {
           error={scanQuery.isError ? errDetail(scanQuery.error) : null}
           onRetry={() => scanQuery.refetch()}
           isEmpty={groups.length === 0}
-          empty="未发现相似案例簇"
-          emptyHint="知识库当前没有满足聚类条件的重复案例"
+          empty={t('kb.merge.noClusters')}
+          emptyHint={t('kb.merge.noClustersHint')}
         >
           <div className="space-y-4">
             {cancelledGroups.length > 0 && (
               <Card className="border-dashed border-amber-500/40">
                 <CardContent className="space-y-2 pt-4 text-xs">
                   <p className="font-medium text-amber-600">
-                    已取消本次合并的扫描结果（{cancelledGroups.length} 组）——案例库数据不受影响，可恢复后重新参与合并
+                    {t('kb.merge.cancelledTitle', { count: cancelledGroups.length })}
                   </p>
                   <ul className="space-y-1.5">
                     {cancelledGroups.map((g) => (
                       <li key={groupKey(g)} className="flex flex-wrap items-center gap-2 text-muted-foreground">
                         <span className="font-mono text-foreground">{g.error_type}</span>
                         <span>
-                          {g.service_name} · {g.case_ids.length} 个相似案例
+                          {g.service_name} · {t('kb.merge.similarCount', { count: g.case_ids.length })}
                         </span>
                         {canMerge && (
                           <Button
@@ -856,7 +867,7 @@ function MergeTab() {
                             onClick={() => setCancelledGroupKeys((s) => s.filter((k) => k !== groupKey(g)))}
                           >
                             <Undo2 className="mr-0.5 h-3 w-3" />
-                            恢复
+                            {t('kb.merge.restore')}
                           </Button>
                         )}
                       </li>
@@ -883,22 +894,22 @@ function MergeTab() {
       )}
 
       <div>
-        <h3 className="mb-2 text-sm font-semibold">合并提案记录</h3>
+        <h3 className="mb-2 text-sm font-semibold">{t('kb.merge.proposalsTitle')}</h3>
         <StateGate
           loading={proposalsQuery.isLoading}
           error={proposalsQuery.isError ? errDetail(proposalsQuery.error) : null}
           onRetry={() => proposalsQuery.refetch()}
           isEmpty={proposals.length === 0}
-          empty="还没有合并提案"
+          empty={t('kb.merge.noProposals')}
         >
           <ul className="space-y-2">
             {proposals.map((p: MergeProposal) => (
               <li key={p.id} className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2.5 text-xs">
                 <StatusBadge status={p.status} />
                 <span className="font-mono font-medium">{p.master_case_id}</span>
-                <span className="text-muted-foreground">← 合并 {p.merged_case_ids.join('、')}</span>
+                <span className="text-muted-foreground">{t('kb.merge.mergedFrom', { list: p.merged_case_ids.join(i18n.language?.startsWith('zh') ? '、' : ', ') })}</span>
                 <span className="ml-auto text-muted-foreground">{p.created_by} · {fmtTime(p.created_at)}</span>
-                {p.approval_request_id && <Badge variant="outline">审批 #{p.approval_request_id}</Badge>}
+                {p.approval_request_id && <Badge variant="outline">{t('kb.merge.approvalRef', { id: p.approval_request_id })}</Badge>}
               </li>
             ))}
           </ul>
@@ -911,6 +922,7 @@ function MergeTab() {
 // ------------------ 页面主体 ------------------
 
 export default function KbPage() {
+  const { t } = useTranslation();
   const perms = usePermissions();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('active');
@@ -940,43 +952,43 @@ export default function KbPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">知识库治理</h1>
+          <h1 className="text-lg font-semibold tracking-tight">{t('kb.page.title')}</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            案例编辑走审批流（禁止自审）、版本可回滚、相似案例去重合并，全程写审计日志。
+            {t('kb.page.subtitle')}
           </p>
         </div>
         {perms?.can_edit_kb && (
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="mr-1.5 h-3.5 w-3.5" />
-            新建案例
+            {t('kb.page.createCase')}
           </Button>
         )}
       </div>
 
       <Tabs defaultValue="cases">
         <TabsList>
-          <TabsTrigger value="cases">案例库</TabsTrigger>
-          <TabsTrigger value="changes">变更记录</TabsTrigger>
-          <TabsTrigger value="merge">去重合并</TabsTrigger>
+          <TabsTrigger value="cases">{t('kb.page.tabCases')}</TabsTrigger>
+          <TabsTrigger value="changes">{t('kb.page.tabChanges')}</TabsTrigger>
+          <TabsTrigger value="merge">{t('kb.page.tabMerge')}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="cases" className="mt-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2.5">
             <Input
               className="h-9 w-64 text-xs"
-              placeholder="搜索案例 ID / 模板 / 根因"
+              placeholder={t('kb.page.searchPlaceholder')}
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger className="h-9 w-32 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="active">活跃案例</SelectItem>
-                <SelectItem value="archived">已归档</SelectItem>
-                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="active">{t('kb.page.filterActive')}</SelectItem>
+                <SelectItem value="archived">{t('kb.page.filterArchived')}</SelectItem>
+                <SelectItem value="all">{t('kb.page.filterAll')}</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-xs text-muted-foreground">共 {casesQuery.data?.total ?? 0} 个案例</span>
+            <span className="text-xs text-muted-foreground">{t('kb.page.totalCases', { count: casesQuery.data?.total ?? 0 })}</span>
           </div>
 
           <StateGate
@@ -984,8 +996,8 @@ export default function KbPage() {
             error={casesQuery.isError ? errDetail(casesQuery.error) : null}
             onRetry={() => casesQuery.refetch()}
             isEmpty={cases.length === 0}
-            empty="没有符合条件的知识案例"
-            emptyHint="尝试切换状态筛选或清空搜索关键词"
+            empty={t('kb.page.noCases')}
+            emptyHint={t('kb.page.noCasesHint')}
           >
             <div className="grid items-start gap-3 md:grid-cols-2 xl:grid-cols-3">
               {cases.map((c: KbCase) => (
@@ -1001,16 +1013,16 @@ export default function KbPage() {
                       <span className="ml-auto text-xs text-muted-foreground">v{c.version ?? '—'}</span>
                     </div>
                     <p className="font-mono text-xs text-muted-foreground">{c.case_id}</p>
-                    <p className="line-clamp-2 text-sm">{c.root_cause || '（无根因）'}</p>
+                    <p className="line-clamp-2 text-sm">{c.root_cause || t('kb.merge.noRootCause')}</p>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{c.service_name}</span>
                       {(c.related_event_count ?? 0) > 0 && (
                         <Badge variant="outline" className="font-normal">
                           <ScrollText className="mr-1 h-3 w-3" />
-                          关联日志 {c.related_event_count}
+                          {t('kb.page.relatedLogs', { count: c.related_event_count })}
                         </Badge>
                       )}
-                      <span className="ml-auto">反馈分 {c.feedback_score ?? 0}</span>
+                      <span className="ml-auto">{t('kb.page.feedbackScore', { score: c.feedback_score ?? 0 })}</span>
                     </div>
                   </CardContent>
                 </Card>
@@ -1025,7 +1037,7 @@ export default function KbPage() {
             error={changeSetsQuery.isError ? errDetail(changeSetsQuery.error) : null}
             onRetry={() => changeSetsQuery.refetch()}
             isEmpty={changeSets.length === 0}
-            empty="暂无变更记录"
+            empty={t('kb.page.noChangeSets')}
           >
             <div className="space-y-2">
               {changeSets.map((cs: ChangeSet) => {
@@ -1040,11 +1052,11 @@ export default function KbPage() {
                       >
                         <StatusBadge status={cs.status} />
                         <span className="font-mono font-medium">{cs.case_id}</span>
-                        <span>{cs.change_type === 'create' ? '新建' : '更新'}</span>
-                        <Badge variant="outline">{entries.length} 个字段</Badge>
+                        <span>{cs.change_type === 'create' ? t('kb.page.changeCreate') : t('kb.page.changeUpdate')}</span>
+                        <Badge variant="outline">{t('kb.page.fieldsCount', { count: entries.length })}</Badge>
                         <span className="ml-auto text-muted-foreground">{cs.created_by} · {fmtTime(cs.created_at)}</span>
                       </button>
-                      {cs.reason && <p className="mt-1 text-xs text-muted-foreground">理由：{cs.reason}</p>}
+                      {cs.reason && <p className="mt-1 text-xs text-muted-foreground">{t('kb.page.reason', { reason: cs.reason })}</p>}
                       {open && (
                         <div className="mt-2.5">
                           <DiffTable entries={entries} />

@@ -1,5 +1,6 @@
 /** C11 用户与角色管理：创建用户档案、分配控制台角色、启用/禁用（仅系统管理员）。 */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserPlus, Users } from 'lucide-react';
 import { toast } from 'sonner';
@@ -23,26 +24,28 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 const ROLE_OPTIONS = [
-  { value: 'viewer', label: '只读审计（viewer）' },
-  { value: 'operator', label: '值班运维（operator）' },
-  { value: 'sre', label: 'SRE（sre）' },
-  { value: 'approver', label: '审批人 / SRE Lead（approver）' },
-  { value: 'kb_admin', label: '知识库管理员（kb_admin）' },
-  { value: 'sys_admin', label: '系统管理员（sys_admin）' },
+  { value: 'viewer', labelKey: 'roleViewer' },
+  { value: 'operator', labelKey: 'roleOperator' },
+  { value: 'sre', labelKey: 'roleSre' },
+  { value: 'approver', labelKey: 'roleApprover' },
+  { value: 'kb_admin', labelKey: 'roleKbAdmin' },
+  { value: 'sys_admin', labelKey: 'roleSysAdmin' },
 ];
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
   return status === 'disabled' ? (
-    <Badge variant="destructive">已禁用</Badge>
+    <Badge variant="destructive">{t('users.statusDisabled')}</Badge>
   ) : (
-    <Badge variant="secondary">启用中</Badge>
+    <Badge variant="secondary">{t('users.statusActive')}</Badge>
   );
 }
 
 /** 创建用户：邮箱预建档，成员首次通过 Atoms 账号登录时自动关联。 */
 function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -53,7 +56,7 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     mutationFn: () =>
       consoleApi.createUser({ email: email.trim(), name: name.trim() || undefined, role, status }),
     onSuccess: (item) => {
-      toast.success(`用户 ${item.email} 已创建，成员首次登录时将自动关联`);
+      toast.success(t('users.toastCreated', { email: item.email }));
       qc.invalidateQueries({ queryKey: ['users'] });
       onOpenChange(false);
       setEmail('');
@@ -66,7 +69,7 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   const submit = () => {
     if (!EMAIL_RE.test(email.trim())) {
-      toast.error('请输入有效的邮箱地址');
+      toast.error(t('users.toastInvalidEmail'));
       return;
     }
     createMut.mutate();
@@ -76,14 +79,12 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>创建用户</DialogTitle>
-          <DialogDescription>
-            以邮箱预建档案并分配角色；成员首次使用 Atoms 账号登录时按邮箱自动关联，无需单独密码。
-          </DialogDescription>
+          <DialogTitle>{t('users.createTitle')}</DialogTitle>
+          <DialogDescription>{t('users.createDesc')}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-1">
           <div className="grid gap-1.5">
-            <Label htmlFor="u-email">邮箱 *</Label>
+            <Label htmlFor="u-email">{t('users.emailLabel')}</Label>
             <Input
               id="u-email"
               placeholder="member@company.com"
@@ -92,11 +93,16 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="u-name">姓名</Label>
-            <Input id="u-name" placeholder="张三" value={name} onChange={(e) => setName(e.target.value)} />
+            <Label htmlFor="u-name">{t('users.nameLabel')}</Label>
+            <Input
+              id="u-name"
+              placeholder={t('users.namePlaceholder')}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
           </div>
           <div className="grid gap-1.5">
-            <Label>控制台角色</Label>
+            <Label>{t('users.roleLabel')}</Label>
             <Select value={role} onValueChange={setRole}>
               <SelectTrigger>
                 <SelectValue />
@@ -104,31 +110,31 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               <SelectContent>
                 {ROLE_OPTIONS.map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {t(`users.${opt.labelKey}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label>状态</Label>
+            <Label>{t('users.statusLabel')}</Label>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="active">启用中</SelectItem>
-                <SelectItem value="disabled">已禁用</SelectItem>
+                <SelectItem value="active">{t('users.statusActive')}</SelectItem>
+                <SelectItem value="disabled">{t('users.statusDisabled')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={createMut.isPending}>
-            取消
+            {t('users.cancel')}
           </Button>
           <Button onClick={submit} disabled={createMut.isPending}>
-            {createMut.isPending ? '创建中…' : '创建用户'}
+            {createMut.isPending ? t('users.creating') : t('users.submitCreate')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -146,6 +152,7 @@ function EditUserDialog({
   selfEmail: string;
   onOpenChange: (v: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [name, setName] = useState(user.name ?? '');
   const [role, setRole] = useState(user.role);
@@ -160,7 +167,7 @@ function EditUserDialog({
         status,
       }),
     onSuccess: (item) => {
-      toast.success(`用户 ${item.email} 已更新，角色变更即时生效`);
+      toast.success(t('users.toastUpdated', { email: item.email }));
       qc.invalidateQueries({ queryKey: ['users'] });
       qc.invalidateQueries({ queryKey: ['permissions'] });
       onOpenChange(false);
@@ -172,23 +179,23 @@ function EditUserDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>编辑用户</DialogTitle>
+          <DialogTitle>{t('users.editTitle')}</DialogTitle>
           <DialogDescription>
-            角色与状态变更即时生效并写入审计日志。
-            {isSelf && ' 当前编辑的是本人账号：不能禁用自己，也不能降低自己的角色。'}
+            {t('users.editDesc')}
+            {isSelf && t('users.selfEditNote')}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-1">
           <div className="grid gap-1.5">
-            <Label>邮箱</Label>
+            <Label>{t('users.emailLabel').replace(' *', '')}</Label>
             <Input value={user.email} disabled />
           </div>
           <div className="grid gap-1.5">
-            <Label htmlFor="e-name">姓名</Label>
+            <Label htmlFor="e-name">{t('users.nameLabel')}</Label>
             <Input id="e-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="grid gap-1.5">
-            <Label>控制台角色</Label>
+            <Label>{t('users.roleLabel')}</Label>
             <Select value={role} onValueChange={setRole}>
               <SelectTrigger>
                 <SelectValue />
@@ -196,22 +203,23 @@ function EditUserDialog({
               <SelectContent>
                 {ROLE_OPTIONS.map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
+                    {t(`users.${opt.labelKey}`)}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label>状态</Label>
+            <Label>{t('users.statusLabel')}</Label>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="active">启用中</SelectItem>
+                <SelectItem value="active">{t('users.statusActive')}</SelectItem>
                 <SelectItem value="disabled" disabled={isSelf}>
-                  已禁用{isSelf && '（本人账号不可选）'}
+                  {t('users.statusDisabled')}
+                  {isSelf && t('users.selfDisabledNote')}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -219,10 +227,10 @@ function EditUserDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={updateMut.isPending}>
-            取消
+            {t('users.cancel')}
           </Button>
           <Button onClick={() => updateMut.mutate()} disabled={updateMut.isPending}>
-            {updateMut.isPending ? '保存中…' : '保存变更'}
+            {updateMut.isPending ? t('users.saving') : t('users.submitSave')}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -231,6 +239,7 @@ function EditUserDialog({
 }
 
 export default function UsersPage() {
+  const { t } = useTranslation();
   const perms = usePermissions();
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -253,16 +262,14 @@ export default function UsersPage() {
     return (
       <div className="space-y-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">用户与角色管理</h1>
-          <p className="mt-1 text-sm text-muted-foreground">运营平台成员档案、角色分配与启用/禁用。</p>
+          <h1 className="text-xl font-semibold tracking-tight">{t('users.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('users.subtitle')}</p>
         </div>
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
             <Users className="h-8 w-8 text-muted-foreground" />
-            <p className="text-sm font-medium">权限不足</p>
-            <p className="text-xs text-muted-foreground">
-              用户与角色管理仅对「系统管理员」开放，如需开通请联系管理员分配 sys_admin 角色。
-            </p>
+            <p className="text-sm font-medium">{t('users.noPermissionTitle')}</p>
+            <p className="text-xs text-muted-foreground">{t('users.noPermissionDesc')}</p>
           </CardContent>
         </Card>
       </div>
@@ -275,21 +282,19 @@ export default function UsersPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">用户与角色管理</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            运营平台成员档案、角色分配与启用/禁用；全部变更写入审计日志。
-          </p>
+          <h1 className="text-xl font-semibold tracking-tight">{t('users.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('users.subtitleFull')}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}>
           <UserPlus className="mr-2 h-4 w-4" />
-          创建用户
+          {t('users.createBtn')}
         </Button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2.5">
         <Input
           className="h-9 w-56 text-xs"
-          placeholder="搜索邮箱 / 姓名"
+          placeholder={t('users.searchPlaceholder')}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -298,12 +303,14 @@ export default function UsersPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="active">启用中</SelectItem>
-            <SelectItem value="disabled">已禁用</SelectItem>
+            <SelectItem value="all">{t('users.allStatus')}</SelectItem>
+            <SelectItem value="active">{t('users.statusActive')}</SelectItem>
+            <SelectItem value="disabled">{t('users.statusDisabled')}</SelectItem>
           </SelectContent>
         </Select>
-        <span className="text-xs text-muted-foreground">共 {query.data?.total ?? 0} 个用户</span>
+        <span className="text-xs text-muted-foreground">
+          {t('users.totalUsers', { count: query.data?.total ?? 0 })}
+        </span>
       </div>
 
       <StateGate
@@ -311,27 +318,27 @@ export default function UsersPage() {
         error={query.isError ? errDetail(query.error) : null}
         onRetry={() => query.refetch()}
         isEmpty={items.length === 0}
-        empty="还没有匹配的用户档案"
-        emptyHint="点击右上角「创建用户」添加第一位成员，或清空筛选条件"
+        empty={t('users.empty')}
+        emptyHint={t('users.emptyHint')}
       >
         <Card>
           <CardContent className="p-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>用户</TableHead>
-                  <TableHead>角色</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead>创建时间</TableHead>
-                  <TableHead>最近登录</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
+                  <TableHead>{t('users.colUser')}</TableHead>
+                  <TableHead>{t('users.colRole')}</TableHead>
+                  <TableHead>{t('users.colStatus')}</TableHead>
+                  <TableHead>{t('users.colCreatedAt')}</TableHead>
+                  <TableHead>{t('users.colLastLogin')}</TableHead>
+                  <TableHead className="text-right">{t('users.colActions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.map((item) => (
                   <TableRow key={item.id}>
                     <TableCell>
-                      <p className="text-sm font-medium">{item.name || '未命名'}</p>
+                      <p className="text-sm font-medium">{item.name || t('users.unnamed')}</p>
                       <p className="text-xs text-muted-foreground">{item.email}</p>
                     </TableCell>
                     <TableCell>
@@ -342,11 +349,11 @@ export default function UsersPage() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{fmtTime(item.created_at)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {item.last_login ? fmtTime(item.last_login) : '从未登录'}
+                      {item.last_login ? fmtTime(item.last_login) : t('users.neverLogin')}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" onClick={() => setEditing(item)}>
-                        编辑
+                        {t('users.editBtn')}
                       </Button>
                     </TableCell>
                   </TableRow>

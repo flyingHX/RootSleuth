@@ -1,3 +1,9 @@
+<div align="right">
+
+[English](README.en.md) | 简体中文
+
+</div>
+
 <p align="center">
   <img src="assets/images/rootsleuth-repo-banner-magnifier-ecg.png" alt="RootSleuth — 侦探放大镜洞察告警根因，心电图脉搏象征持续运行的知识闭环" width="920"/>
 </p>
@@ -75,13 +81,16 @@ uvicorn src.main:app --host 0.0.0.0 --port 8001
 
 | 文档 | 内容 |
 |------|------|
-| `docs/CONSOLE_USER_GUIDE.md` | 控制台使用手册（角色、页面、操作流程） |
-| `docs/CONSOLE_FAQ.md` | 控制台常见问题 |
-| `docs/OPERATIONS_DEPLOYMENT_GUIDE.md` | 运维部署方案手册（含中间件架构 §21、部署指令 §22） |
-| `docs/OPERATIONS_RUNBOOK.md` | 值班应急手册（故障处置矩阵、备份恢复、安全应急） |
-| `docs/DEMO_ACCOUNTS.md` | 演示账号说明（各角色演示账号、免密登录方式、中间件默认凭证与生产安全约束） |
-| `aiops-rag-system/README.md` | 流水线架构、快速开始、API 一览、关键设计 |
-| `app/backend/README.md` / `app/frontend/README.md` | 控制台前后端开发规范 |
+| `docs/CONSOLE_USER_GUIDE.md` · [English](docs/CONSOLE_USER_GUIDE.en.md) | 控制台使用手册（角色、页面、操作流程） |
+| `docs/CONSOLE_FAQ.md` · [English](docs/CONSOLE_FAQ.en.md) | 控制台常见问题 |
+| `docs/OPERATIONS_DEPLOYMENT_GUIDE.md` · [English](docs/OPERATIONS_DEPLOYMENT_GUIDE.en.md) | 运维部署方案手册（含中间件架构 §21、部署指令 §22） |
+| `docs/OPERATIONS_RUNBOOK.md` · [English](docs/OPERATIONS_RUNBOOK.en.md) | 值班应急手册（故障处置矩阵、备份恢复、安全应急） |
+| `docs/DEMO_ACCOUNTS.md` · [English](docs/DEMO_ACCOUNTS.en.md) | 演示账号说明（各角色演示账号、免密登录方式、中间件默认凭证与生产安全约束） |
+| `aiops-rag-system/README.md` · [English](aiops-rag-system/README.en.md) | 流水线架构、快速开始、API 一览、关键设计 |
+| `app/backend/README.md` · [English](app/backend/README.en.md) | 控制台后端开发说明 |
+| `app/frontend/README.md` · [English](app/frontend/README.en.md) | 控制台前端开发说明 |
+
+> 设计与评测类深度文档暂仅提供中文：`docs/DIAGNOSE_AGENT_DESIGN.md`、`docs/KB_GOVERNANCE_AGENT_DESIGN.md`、`docs/ONCALL_AGENT_DESIGN.md`、`docs/RAG_TRUST_EVALUATION.md`。
 
 ## 开源与安全
 
