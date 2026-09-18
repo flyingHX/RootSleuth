@@ -120,7 +120,7 @@
 | confidence_threshold | 诊断置信度阈值（0~1） |
 | rerank_weight_json | 重排权重（cosine/topology/time_decay/feedback） |
 | diagnose_temperature | 诊断 Agent 独立采样温度（默认 0：同一事件重复深度诊断输出稳定；治理/值班 Agent 仍使用 llm_temperature=0.2） |
-| diagnose_time_budget_seconds | 诊断墙钟时间预算（30~600 秒，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级/返回 502，防止 LLM 变慢时请求无限拉长 |
+| diagnose_time_budget_seconds | 诊断墙钟时间预算（30~600 秒，默认 90）：深度诊断与单轮诊断（一键诊断 /events/{id}/diagnose 及 Agent 降级路径）的总时长上限，每次 LLM 调用前按剩余预算截断超时，超时返回结构化 502 并自动降级，防止请求越过边缘代理（如 Cloudflare 100s）导致 502 |
 | llm_provider / llm_base_url / llm_api_key / llm_model / llm_temperature / llm_timeout_seconds | LLM 全局默认接入与模型参数（三个 Agent 独立配置留空时逐项继承；API Key 加密存储、脱敏展示） |
 | diagnose_llm_provider / diagnose_llm_base_url / diagnose_llm_api_key | 诊断 Agent 独立 LLM 接入：接入方式（atoms_hub / openai_compatible）+ OpenAI 兼容 Base URL + API Key（留空逐项继承全局；API Key 加密存储、脱敏展示） |
 | diagnose_llm_model / diagnose_llm_timeout_seconds | 诊断 Agent 独立模型与单次调用超时（10~300 秒；留空继承全局） |

@@ -104,13 +104,18 @@ def _embed_text_for_case(case: Kb_cases) -> str:
 
 
 async def apply_embedding_rerank(
-    db: AsyncSession, event: Events, cases: List[Kb_cases], candidates: List[Dict[str, Any]]
+    db: AsyncSession,
+    event: Events,
+    cases: List[Kb_cases],
+    candidates: List[Dict[str, Any]],
+    timeout: float = 30.0,
 ) -> Optional[Dict[str, Any]]:
     """Embedding 语义加分：对业务重排后的候选案例计算余弦相似度并加权。
 
     - 未配置 Embedding（embedding_model 为空）时返回 None，保持纯业务重排；
     - 调用失败静默降级（不阻断诊断主链路）；
-    - 加分权重 0.5 * cosine，score 仍归一化到 0~0.99 并重新排序。
+    - 加分权重 0.5 * cosine，score 仍归一化到 0~0.99 并重新排序；
+    - timeout 按诊断墙钟预算截断传入（诊断主链路防 502），默认 30s 兼容既有调用。
     """
     if not candidates:
         return None
@@ -119,6 +124,7 @@ async def apply_embedding_rerank(
     vectors = await llm_runtime.embed_texts(
         db,
         [_embed_text_for_event(event)] + [_embed_text_for_case(case) for case in ranked_cases],
+        timeout=timeout,
     )
     if not vectors or len(vectors) != len(ranked_cases) + 1:
         return None
@@ -215,9 +221,39 @@ def _apply_rag_fields(
     event.candidates_json = json.dumps(candidates, ensure_ascii=False)
 
 
-async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str, Any]:
-    """执行完整诊断闭环。AI 失败时持久化降级原因并抛出可重试错误。"""
+# ------------------ 单轮诊断墙钟预算（Cloudflare 502 防护） ------------------
+# 与 Agent 深度诊断共用 diagnose_time_budget_seconds 配置键：直接路由调用
+# （POST /events/{id}/diagnose）自建预算，Agent 降级调用继承剩余预算（deadline 透传），
+# 保证单轮诊断"Embedding + 两次 LLM 尝试 + 持久化"的整体耗时有界。
+_SINGLE_PERSIST_RESERVE_SECONDS = 5.0  # 结论持久化与审计写入的保留时间
+_SINGLE_MIN_LLM_SECONDS = 10.0  # 发起一次 LLM 调用所需的最小剩余预算（调用 + 持久化）
+_SINGLE_LLM_RESERVE_SECONDS = 15.0  # Embedding 阶段为后续 LLM 调用预留的最小时间
+
+
+async def _resolve_single_round_budget(db: AsyncSession) -> float:
+    """读取诊断墙钟预算（diagnose_time_budget_seconds，默认 90）。
+
+    延迟导入 console_agent 复用同一解析实现（clamp 30~600、空/非法/NaN 回退 90），
+    避免 console_ai ↔ console_agent 的模块级循环导入。
+    """
+    from services.console_agent import DIAGNOSE_TIME_BUDGET_DEFAULT, _parse_diagnose_time_budget
+
+    raw = await get_config(db, "diagnose_time_budget_seconds", str(int(DIAGNOSE_TIME_BUDGET_DEFAULT)))
+    return _parse_diagnose_time_budget(raw)
+
+
+async def run_diagnosis(
+    db: AsyncSession, event_id: int, actor: str, deadline: Optional[float] = None
+) -> Dict[str, Any]:
+    """执行完整诊断闭环。AI 失败时持久化降级原因并抛出可重试错误。
+
+    deadline 为墙钟预算绝对时刻（perf_counter）：直接路由调用按
+    diagnose_time_budget_seconds 自建预算；Agent 降级调用传入其剩余预算，
+    每次尝试前按剩余预算截断单次 LLM 超时，预算耗尽返回结构化 502。
+    """
     total_started = time.perf_counter()
+    if deadline is None:
+        deadline = total_started + await _resolve_single_round_budget(db)
     result = await db.execute(select(Events).where(Events.id == event_id))
     event = result.scalar_one_or_none()
     if event is None:
@@ -228,7 +264,14 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
 
     started = time.perf_counter()
     candidates = build_candidates(cases, event)
-    embedding_meta = await apply_embedding_rerank(db, event, cases, candidates)
+    # Embedding 语义加分按剩余预算截断超时（fail-open：超时/失败静默跳过，不影响业务重排）
+    embedding_meta = await apply_embedding_rerank(
+        db,
+        event,
+        cases,
+        candidates,
+        timeout=min(30.0, max(3.0, deadline - time.perf_counter() - _SINGLE_LLM_RESERVE_SECONDS)),
+    )
     rag_ms = (time.perf_counter() - started) * 1000.0
 
     if not candidates:
@@ -266,12 +309,23 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
     last_error = ""
     try:
         for attempt in range(2):
+            # 墙钟预算（Cloudflare 502 防护）：每次尝试前按剩余预算截断单次调用超时；
+            # 预算不足以完成"LLM 调用 + 持久化"时返回结构化 502，不再发起调用
+            remaining = deadline - time.perf_counter() - _SINGLE_PERSIST_RESERVE_SECONDS
+            if remaining < _SINGLE_MIN_LLM_SECONDS:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        f"诊断墙钟预算耗尽（diagnose_time_budget_exhausted，剩余 {remaining:.1f}s），"
+                        "请稍后重试或在配置中心调大 diagnose_time_budget_seconds"
+                    ),
+                )
             try:
                 response = await llm_runtime.llm_chat(
                     db,
                     messages,
                     max_tokens=1200,
-                    timeout=timeout_seconds,
+                    timeout=min(timeout_seconds, max(1, int(remaining))),
                     agent="diagnose",
                 )
                 payload = extract_json_payload(response.content)
@@ -293,9 +347,14 @@ async def run_diagnosis(db: AsyncSession, event_id: int, actor: str) -> Dict[str
                     status_code=504,
                     detail=f"LLM 诊断超时（>{timeout_seconds}s），请稍后重试或调大 diagnose_llm_timeout_seconds（或全局 llm_timeout_seconds）配置",
                 )
-    except HTTPException:
+    except HTTPException as exc:
         event.rag_status = _DEGRADED_RAG_STATUS
-        event.degraded_reason = "llm_timeout"
+        # 预算耗尽（502）与 LLM 超时（504）都经此持久化降级状态，原因按 detail 区分
+        event.degraded_reason = (
+            "diagnose_time_budget_exhausted"
+            if "diagnose_time_budget_exhausted" in str(exc.detail)
+            else "llm_timeout"
+        )
         event.confidence = None
         event.ai_root_cause = None
         await db.commit()

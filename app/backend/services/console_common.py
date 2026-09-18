@@ -105,7 +105,7 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "llm_model": "LLM Chat 模型名称（全局默认，三个 Agent 可用 <agent>_llm_model 单独覆盖，如 deepseek-v4-flash）",
     "llm_temperature": "LLM 采样温度（0~2，默认 0.2）",
     "diagnose_temperature": "深度诊断 Agent 采样温度（0~2，默认 0：固定零温保证同一事件重复诊断输出稳定；非法值回退 0）",
-    "diagnose_time_budget_seconds": "诊断 Agent 墙钟时间预算（秒，30~600，默认 90）：多轮推理+强制收尾的总时长上限，超时自动降级，防止 LLM 变慢时请求无限拉长",
+    "diagnose_time_budget_seconds": "诊断墙钟时间预算（秒，30~600，默认 90）：深度诊断多轮推理+强制收尾+单轮诊断（含 Agent 降级）的总时长上限，超时返回结构化 502 并自动降级，防止 LLM 变慢时请求越过边缘代理（如 Cloudflare 100s）",
     "diagnose_llm_model": "深度诊断 Agent 独立模型名（留空继承全局 llm_model）",
     "diagnose_llm_timeout_seconds": "深度诊断 Agent 单次 LLM 超时（秒，10~300；留空继承全局 llm_timeout_seconds）",
     "kb_governance_llm_model": "知识治理 Agent 独立模型名（留空继承全局 llm_model）",

@@ -96,7 +96,7 @@ python scripts/fix_sequences.py
 
 > **诊断确定性配置（波动治理）**：诊断 Agent 采样温度不在环境变量中管理，而是走控制台配置中心 `console_configs` 的 `diagnose_temperature` 键（默认 `0`）。生产环境保持默认 0 以保证同一事件重复深度诊断输出稳定（模型、检索与工具轨迹可复现）；如需多路径探索再调高。修改即时生效并写 `config_update` 审计，详见《深度诊断 Agent 现状设计说明书》§8。
 
-> **诊断墙钟时间预算（Cloudflare 502 防护）**：诊断整体耗时同样走配置中心 `diagnose_time_budget_seconds` 键（默认 `90` 秒，范围 30~600）。多轮 ReAct 推理、强制收尾与单轮降级的时长叠加受该预算约束：余量不足即停止推理转入收尾，预算耗尽跳过 LLM 降级并返回结构化 502（`diagnose_time_budget_exhausted`），避免 LLM 变慢时请求时长叠加越过边缘代理（如 Cloudflare 默认 100s）或 Nginx 超时。生产部署时预算值应小于链路中最短的超时预算（边缘代理 < Nginx `proxy_read_timeout` < 应用内部超时）；经 Cloudflare 代理的部署建议保持默认 90 或更低。修改即时生效并写 `config_update` 审计。
+> **诊断墙钟时间预算（Cloudflare 502 防护）**：诊断整体耗时同样走配置中心 `diagnose_time_budget_seconds` 键（默认 `90` 秒，范围 30~600）。预算同时约束深度诊断与单轮诊断两条链路：深度诊断的多轮 ReAct 推理、循环内每次 LLM 调用（按剩余预算截断单次超时）、强制收尾与单轮降级（继承剩余预算 deadline）均受其约束；单轮诊断直连路由（POST /events/{id}/diagnose，含 Embedding 语义加分与两次 LLM 尝试）自同一配置键取值。余量不足即停止推理转入收尾，预算耗尽返回结构化 502（`diagnose_time_budget_exhausted`），避免 LLM 变慢时请求时长叠加越过边缘代理（如 Cloudflare 默认 100s）或 Nginx 超时。生产部署时预算值应小于链路中最短的超时预算（边缘代理 < Nginx `proxy_read_timeout` < 应用内部超时）；经 Cloudflare 代理的部署建议保持默认 90 或更低。修改即时生效并写 `config_update` 审计。
 
 > **Agent 独立 LLM 接入（配置中心）**：诊断 / 知识治理 / 值班三个 Agent 均支持独立 LLM 运行参数，配置键为 `<agent>_llm_provider` / `<agent>_llm_base_url` / `<agent>_llm_api_key` / `<agent>_llm_model` / `<agent>_llm_timeout_seconds`（`<agent>` ∈ `diagnose` / `kb_governance` / `oncall`）及独立温度（`diagnose_temperature` / `kb_governance_temperature` / `oncall_temperature`）。所有键**留空时逐项继承全局 `llm_*` 配置**，可只覆盖其中几项（如仅给诊断 Agent 换 API Key 或 Base URL）；API Key 由服务端 Fernet 加密持久化、脱敏展示。配置中心每个 Agent 分组提供连通性测试（返回解析后的模型/超时/接入方式与 access_source）；全部参数每次请求实时读库，变更即时生效，无需重启。
 

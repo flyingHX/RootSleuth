@@ -397,7 +397,9 @@ async def _run_react(
 
     temperature 透传给全部 LLM 调用（含超限强制收尾），诊断 Agent 传 0 保证确定性。
     deadline 为墙钟时间预算的绝对时刻（perf_counter）：余量不足时停止继续推理转入
-    强制收尾（trace 记录 budget_exceeded），整体耗时不再随 LLM 变慢无限叠加。
+    强制收尾（trace 记录 budget_exceeded），整体耗时不再随 LLM 变慢无限叠加；
+    循环内每次 LLM 调用的超时按剩余预算截断（_remaining_llm_timeout），防止
+    预算末尾的单次长调用越过整体 deadline（Cloudflare 502 防护）。
     """
     trace: List[Dict[str, Any]] = []
     messages: List[ChatMessage] = [
@@ -407,6 +409,10 @@ async def _run_react(
     started = time.perf_counter()
     iterations = 0
     usage_acc: Dict[str, int] = {}
+    try:
+        cfg_timeout = int(await llm_runtime.get_llm_timeout(db, "diagnose"))
+    except (TypeError, ValueError):
+        cfg_timeout = 45
 
     format_retries_left = FORMAT_RETRY_BUDGET
     while iterations < MAX_ITERATIONS:
@@ -424,7 +430,15 @@ async def _run_react(
             break
         iterations += 1
         await _flush(db)
-        response = await _llm_chat(db, messages, temperature=temperature, agent="diagnose")
+        # 单次调用超时按剩余预算截断（Cloudflare 502 防护）：轮次开始前的余量检查
+        # 约束不了本轮调用本身，配置超时（最高 300s）可在预算末尾越界数十秒
+        response = await _llm_chat(
+            db,
+            messages,
+            temperature=temperature,
+            timeout=_remaining_llm_timeout(deadline, cfg_timeout),
+            agent="diagnose",
+        )
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is None:
@@ -751,10 +765,15 @@ async def _diagnose_fallback(
     db: AsyncSession,
     event_id: int,
     actor: str,
+    deadline: Optional[float] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """降级路径：复用既有单轮诊断（可能返回 unknown 结果或抛错）。"""
+    """降级路径：复用既有单轮诊断（可能返回 unknown 结果或抛错）。
+
+    deadline 透传给 run_diagnosis：降级继承 Agent 的剩余墙钟预算，避免
+    "Agent 已耗时 + 降级全新预算"叠加越过边缘代理（如 Cloudflare 100s）超时。
+    """
     try:
-        fallback = await run_diagnosis(db, event_id, actor)
+        fallback = await run_diagnosis(db, event_id, actor, deadline=deadline)
         return fallback, None
     except Exception as exc:  # noqa: BLE001
         return None, f"{type(exc).__name__}: {exc}"
@@ -817,6 +836,7 @@ DIAGNOSE_TIME_BUDGET_MAX = 600.0
 DIAGNOSE_TIME_RESERVE_SECONDS = 12.0
 DIAGNOSE_MIN_CONCLUDE_SECONDS = 5.0
 DIAGNOSE_MIN_FALLBACK_SECONDS = 15.0
+DIAGNOSE_MIN_ROUND_SECONDS = 8.0  # 循环内单次 LLM 调用超时下限（须小于 RESERVE，保证整体耗时有界）
 
 
 def _parse_diagnose_time_budget(raw: Optional[str]) -> float:
@@ -834,6 +854,25 @@ async def _resolve_diagnose_time_budget(db: AsyncSession) -> float:
     """读取配置中心 diagnose_time_budget_seconds（默认 90）：诊断整体墙钟预算。"""
     raw = await get_config(db, "diagnose_time_budget_seconds", str(int(DIAGNOSE_TIME_BUDGET_DEFAULT)))
     return _parse_diagnose_time_budget(raw)
+
+
+def _remaining_llm_timeout(
+    deadline: Optional[float],
+    cfg_timeout: int,
+    now: Optional[float] = None,
+) -> Optional[int]:
+    """按剩余墙钟预算截断单次 LLM 调用超时（秒）；deadline 为 None 时不设限。
+
+    截断语义：timeout = min(配置超时, 剩余预算 - 时间预留)，下限
+    DIAGNOSE_MIN_ROUND_SECONDS（须小于 DIAGNOSE_TIME_RESERVE_SECONDS，
+    保证调用最迟在 deadline 前结束、整体耗时始终有界，Cloudflare 502 防护）。
+    仅应在"剩余预算 ≥ 时间预留"的轮次调用（_run_react 每轮开始前已检查）。
+    """
+    if deadline is None:
+        return None
+    current = time.perf_counter() if now is None else now
+    raw = int(deadline - current - DIAGNOSE_TIME_RESERVE_SECONDS)
+    return min(cfg_timeout, max(int(DIAGNOSE_MIN_ROUND_SECONDS), raw))
 
 
 def _rank_local_cases(
@@ -1172,7 +1211,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
     if time_budget - elapsed / 1000.0 < DIAGNOSE_MIN_FALLBACK_SECONDS:
         fallback, fallback_error = None, "diagnose_time_budget_exhausted"
     else:
-        fallback, fallback_error = await _diagnose_fallback(db, event_id, actor)
+        fallback, fallback_error = await _diagnose_fallback(db, event_id, actor, deadline=deadline)
     status = "degraded" if fallback is not None else "failed"
     row = await _save_session(
         db,
