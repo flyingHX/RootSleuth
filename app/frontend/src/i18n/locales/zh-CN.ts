@@ -902,6 +902,11 @@ const zhCN = {
         roleSre: 'sre（值班）',
         roleApprover: 'approver（审批）',
         roleKbAdmin: 'kb_admin（知识库管理员）',
+        routingAuto: '智能路由（auto）',
+        routingLocalOnly: '仅本地（local_only）',
+        routingRemoteOnly: '仅远程（remote_only）',
+        maskingOn: '开启（原始内容不落库）',
+        maskingOff: '关闭（跳过脱敏）',
       },
       labels: {
         llm_provider: 'LLM 接入方式',
@@ -935,6 +940,12 @@ const zhCN = {
         notify_webhook_url: '通知推送地址',
         notify_webhook_token: '通知推送 Token',
         event_ingest_token: '事件同步 Token',
+        llm_routing_policy: 'LLM 路由策略',
+        llm_remote_approval_id: '远程处理审批编号',
+        llm_local_base_url: '本地 LLM Base URL',
+        llm_local_model: '本地 LLM 模型',
+        llm_local_api_key: '本地 LLM API Key',
+        data_masking_enabled: '入站数据脱敏开关',
         approval_mode: '审批模式',
         confidence_threshold: '置信度阈值',
         rerank_weight_json: '重排权重 JSON',
@@ -966,6 +977,14 @@ const zhCN = {
         integration: {
           title: '集成与通知',
           hint: '通知推送地址用于诊断完成后向外部系统（如 ITSM Webhook）推送根因/处理建议；事件同步 Token 用于外部流水线向控制台同步告警（X-Ingest-Token 头，留空放行）。Token 加密存储、脱敏展示。',
+        },
+        llmRouting: {
+          title: '混合 LLM 路由',
+          hint: '敏感度/告警等级/服务等级三维决策：敏感数据与 critical 告警强制本地 LLM，绝不送远程；远程处理需填写合规审批编号（留空回退本地）。本地接入经 OpenAI 兼容接口（如 Ollama/vLLM），本地不可用时敏感告警降级确定性结论。',
+        },
+        dataMasking: {
+          title: '数据分级与脱敏',
+          hint: '开启后外部同步的告警原文在落库前自动掩码证件/手机号/银行卡/内网 IP/密钥，原始内容不落库；掩码占位符保留可识别格式（138****5678、10.1.2.x）并驱动路由敏感度判定。',
         },
         policy: {
           title: '诊断与审批策略',

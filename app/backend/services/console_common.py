@@ -3,11 +3,12 @@
 角色层级（值越大权限越高）：
 viewer(0) < operator(1) < sre(2) < approver(3) < kb_admin(4) < sys_admin(5)
 """
+import hashlib
 import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -89,6 +90,14 @@ CONFIG_DEFAULTS: Dict[str, str] = {
     "notify_webhook_url": "",
     "notify_webhook_token": "",
     "event_ingest_token": "",
+    # 混合 LLM 分级路由（评审：本地 LLM + 远程 LLM 混合调用，敏感数据不出域）
+    "llm_local_base_url": "",
+    "llm_local_model": "",
+    "llm_local_api_key": "",
+    "llm_routing_policy": "auto",
+    "llm_remote_approval_id": "",
+    # 入站数据脱敏（评审：告警原文先脱敏再落库，原始内容不落库）
+    "data_masking_enabled": "true",
     "feature_flags_json": '{"auto_diagnose":true,"dedup_scan":true}',
     # 未绑定角色用户的默认角色设为 sre：保证真实账号登录后可见三类 Agent 操作按钮（viewer 只读会全部隐藏）；
     # 安全红线不变：default_role 校验禁止设为 sys_admin
@@ -134,6 +143,12 @@ CONFIG_DESCRIPTIONS: Dict[str, str] = {
     "notify_webhook_url": "诊断后通知推送 Webhook 地址（如 ITSM 工单系统；须以 http:// 或 https:// 开头；留空表示不推送）",
     "notify_webhook_token": "通知推送鉴权 Token（以 Authorization: Bearer 头随通知一并携带；加密存储、脱敏展示；留空表示不携带鉴权头）",
     "event_ingest_token": "事件同步入口鉴权 Token（外部系统 POST /api/v1/ingest/alerts 须携带 X-Ingest-Token 头精确匹配；加密存储、脱敏展示；留空表示不鉴权放行，与 RAG fail-open 口径一致）",
+    "llm_local_base_url": "本地 LLM OpenAI 兼容 Base URL（Ollama 如 http://ollama:11434/v1、vLLM 如 http://vllm:8000/v1；留空表示未部署本地 LLM，敏感数据诊断降级为确定性结论）",
+    "llm_local_model": "本地 LLM 模型名称（如 qwen2.5:14b、deepseek-r1:14b；与 llm_local_base_url 同时配置后本地路由可用）",
+    "llm_local_api_key": "本地 LLM API Key（Ollama/vLLM 通常留空即可；加密存储、脱敏展示；留空表示匿名访问本地网关）",
+    "llm_routing_policy": "LLM 混合路由策略：auto（按敏感度/服务等级/告警等级三维决策，默认保守走本地）/ local_only（全部走本地，未部署本地 LLM 时降级确定性结论）/ remote_only（全部走远程，敏感数据仍强制本地）",
+    "llm_remote_approval_id": "远程 LLM 数据出域合规审批编号（留空时远程路由被拒绝，一律走本地或确定性降级；用于审计追溯的数据出域受理凭证）",
+    "data_masking_enabled": "入站数据脱敏开关（true/false，默认 true）：开启后事件同步入口对银行卡号/手机号/身份证/内网 IP/密钥赋值/Bearer Token/邮箱/长令牌掩码后再落库，原始内容不落库；脱敏判定同时作为 LLM 路由敏感度依据",
     "kb_expire_days": "知识老化归档天数（生命周期巡检：老化且负反馈的活跃案例归档淘汰）",
     "kb_expire_unconditional_days": "知识无条件老化天数（健康报表红级阈值；0 或留空 = 2×kb_expire_days）",
     "feature_flags_json": "功能开关 JSON（auto_diagnose/dedup_scan 等）",
@@ -277,6 +292,115 @@ async def write_audit(
     await db.commit()
 
 
+# ------------------ 合规审计哈希链（评审：LLM 调用合规审计留痕） ------------------
+# 仅对合规链动作（llm_route_decision / llm_invocation）建立 prev_hash/hash 链，
+# 复用现有 audit_logs 表（链字段存于 after_json.chain），不改表结构。
+# hash = sha256(prev_hash | actor | action | target_type | target_id | after 规范化 JSON)，
+# 覆盖审计内容本身；篡改任何一条记录的 after_json 都会导致整条链校验失败。
+
+COMPLIANCE_CHAIN_ACTIONS = ("llm_route_decision", "llm_invocation")
+
+
+def compute_chain_hash(
+    prev_hash: str,
+    actor: str,
+    action: str,
+    target_type: str,
+    target_id: Any,
+    after: Optional[Dict[str, Any]],
+) -> str:
+    """计算审计链哈希：after 为不含 chain 块的业务字段字典（规范化排序后参与哈希）。"""
+    payload = json.dumps(after or {}, ensure_ascii=False, sort_keys=True, default=str)
+    raw = "|".join(
+        [prev_hash or "GENESIS", actor or "system", action, target_type, str(target_id), payload]
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _read_chain_hash(after_json: Optional[str]) -> str:
+    """从既有审计行的 after_json 中读取链哈希（解析失败返回空串）。"""
+    if not after_json:
+        return ""
+    try:
+        data = json.loads(after_json)
+    except (TypeError, ValueError):
+        return ""
+    if isinstance(data, dict):
+        return str((data.get("chain") or {}).get("hash") or "")
+    return ""
+
+
+async def write_audit_chained(
+    db: AsyncSession,
+    actor: str,
+    action: str,
+    target_type: str,
+    target_id: Any,
+    after: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """写入带哈希链的合规审计记录（独立提交，语义同 write_audit）。
+
+    prev_hash 取合规链动作的最近一条记录哈希；返回本次链信息（prev_hash/hash）
+    供调用方复核。after 中不建议自带 chain 键（写入时会被覆盖）。
+    """
+    result = await db.execute(
+        select(Audit_logs)
+        .where(Audit_logs.action.in_(COMPLIANCE_CHAIN_ACTIONS))
+        .order_by(Audit_logs.id.desc())
+        .limit(1)
+    )
+    prev_row = result.scalar_one_or_none()
+    prev_hash = _read_chain_hash(prev_row.after_json) if prev_row is not None else ""
+    chain_after: Dict[str, Any] = dict(after or {})
+    chain_after.pop("chain", None)
+    hash_value = compute_chain_hash(prev_hash, actor, action, target_type, target_id, chain_after)
+    chain_after["chain"] = {"prev_hash": prev_hash or None, "hash": hash_value}
+    entry = Audit_logs(
+        actor=actor or "system",
+        action=action,
+        target_type=target_type,
+        target_id=str(target_id),
+        after_json=json.dumps(chain_after, ensure_ascii=False),
+    )
+    db.add(entry)
+    await db.commit()
+    return {"prev_hash": prev_hash or None, "hash": hash_value}
+
+
+async def verify_compliance_chain(db: AsyncSession) -> Dict[str, Any]:
+    """校验合规审计哈希链完整性：逐条重算哈希并比对 prev_hash 连接。
+
+    返回 {"ok": bool, "total": int, "head_hash": str, "broken_id": Optional[int]}。
+    """
+    result = await db.execute(
+        select(Audit_logs)
+        .where(Audit_logs.action.in_(COMPLIANCE_CHAIN_ACTIONS))
+        .order_by(Audit_logs.id.asc())
+    )
+    rows = list(result.scalars().all())
+    prev_hash = ""
+    for row in rows:
+        try:
+            data = json.loads(row.after_json or "{}")
+        except (TypeError, ValueError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        chain = data.get("chain") or {}
+        recomputed = compute_chain_hash(
+            prev_hash,
+            row.actor,
+            row.action,
+            row.target_type,
+            row.target_id,
+            {k: v for k, v in data.items() if k != "chain"},
+        )
+        if chain.get("hash") != recomputed or (chain.get("prev_hash") or "") != prev_hash:
+            return {"ok": False, "total": len(rows), "head_hash": prev_hash, "broken_id": row.id}
+        prev_hash = str(chain.get("hash") or "")
+    return {"ok": True, "total": len(rows), "head_hash": prev_hash, "broken_id": None}
+
+
 def snapshot_case(case: Any) -> Dict[str, Any]:
     """提取知识案例的业务字段快照（不含主键与时间戳）。"""
     return {
@@ -324,6 +448,73 @@ def mask_sensitive(text: Optional[str]) -> Optional[str]:
     masked = _EMAIL_RE.sub("***@***", masked)
     masked = _LONG_TOKEN_RE.sub("***", masked)
     return masked
+
+
+# ------------------ 入站数据脱敏管道（评审：数据分级与脱敏） ------------------
+# 覆盖类别：身份证 / 手机号 / 银行卡（15~19 位连续数字）/ 内网 IP / 密钥赋值 /
+# Bearer Token / 邮箱 / 长令牌。掩码占位符本身保留可识别格式（如 138****5678、
+# 10.1.2.x），便于 detect_sensitivity 对已落库文本二次判定敏感度并驱动 LLM 路由。
+
+_ID_CARD_RE = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
+_PHONE_RE = re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")
+_BANK_CARD_RE = re.compile(r"(?<!\d)\d{15,19}(?!\d)")
+_PRIVATE_IP_RE = re.compile(
+    r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3})\b"
+)
+_MASKED_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){2}\.x\b", re.IGNORECASE)
+
+
+def mask_alert_text(text: Optional[str]) -> Optional[str]:
+    """入站告警文本脱敏：先个人证件/号码/内网 IP，再凭据类（复用 mask_sensitive 规则）。
+
+    顺序敏感：身份证（18 位含校验位）先于银行卡（15~19 位）匹配，避免纯数字
+    身份证被当作卡号掩码；手机号 11 位与卡号区间天然不重叠。Bearer 令牌先于
+    密钥赋值规则掩码：避免 "Authorization: Bearer <token>" 的令牌值被键值对
+    规则吞掉键名后以明文残留。
+    """
+    if not text:
+        return text
+    masked = _ID_CARD_RE.sub(lambda m: f"{m.group(0)[:3]}****{m.group(0)[-4:]}", text)
+    masked = _PHONE_RE.sub(lambda m: f"{m.group(0)[:3]}****{m.group(0)[-4:]}", masked)
+    masked = _BANK_CARD_RE.sub(lambda m: f"{m.group(0)[:4]}****{m.group(0)[-4:]}", masked)
+    masked = _PRIVATE_IP_RE.sub(lambda m: ".".join(m.group(0).split(".")[:3]) + ".x", masked)
+    masked = _BEARER_RE.sub("Bearer ***", masked)
+    return mask_sensitive(masked) or masked
+
+
+def detect_sensitivity(text: Optional[str]) -> Tuple[bool, List[str]]:
+    """检测文本敏感度：命中返回 (True, 类别列表)。
+
+    两层判定：
+    - 原始敏感模式（密钥赋值 / Bearer / 内网 IP / 手机号 / 身份证 / 15~19 位数字 /
+      邮箱 / 长令牌）：用于脱敏开关关闭时落库原文的场景兜底；
+    - 掩码占位模式（****、a.b.c.x、***@***）：用于脱敏后落库文本的二次判定。
+    任一命中即视为敏感，作为混合 LLM 路由「敏感数据强制本地」的依据。
+    """
+    if not text:
+        return False, []
+    hits: List[str] = []
+    if _SENSITIVE_KEY_RE.search(text):
+        hits.append("credential_assignment")
+    if _BEARER_RE.search(text):
+        hits.append("bearer_token")
+    if _PRIVATE_IP_RE.search(text) or _MASKED_IP_RE.search(text):
+        hits.append("internal_ip")
+    if _PHONE_RE.search(text):
+        hits.append("phone_number")
+    if _ID_CARD_RE.search(text):
+        hits.append("id_card")
+    if _BANK_CARD_RE.search(text):
+        hits.append("bank_card_or_long_digits")
+    if _EMAIL_RE.search(text):
+        hits.append("email")
+    if _LONG_TOKEN_RE.search(text):
+        hits.append("long_token")
+    if "****" in text or "***@***" in text:
+        hits.append("masked_placeholder")
+    return (bool(hits), sorted(set(hits)))
 
 
 def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
@@ -423,6 +614,27 @@ def validate_config_value(key: str, value: str) -> Tuple[bool, str]:
     if key in ("notify_webhook_token", "event_ingest_token"):
         if "****" in value:
             return False, f"{key} 展示为脱敏格式，请输入完整 Token（或留空清除）"
+        return True, "ok"
+    if key == "llm_routing_policy":
+        if value not in ("auto", "local_only", "remote_only"):
+            return False, "llm_routing_policy 仅支持 auto / local_only / remote_only"
+        return True, "ok"
+    if key == "llm_local_base_url":
+        value = value.strip()
+        if value and not value.startswith(("http://", "https://")):
+            return False, "llm_local_base_url 必须以 http:// 或 https:// 开头（或留空）"
+        return True, "ok"
+    if key in ("llm_local_model", "llm_remote_approval_id"):
+        if "****" in value:
+            return False, f"{key} 配置值无效（请输入完整内容或留空）"
+        return True, "ok"
+    if key == "llm_local_api_key":
+        if "****" in value:
+            return False, "llm_local_api_key 展示为脱敏格式，请输入完整 API Key（或留空清除）"
+        return True, "ok"
+    if key == "data_masking_enabled":
+        if value not in ("true", "false"):
+            return False, "data_masking_enabled 仅支持 true / false"
         return True, "ok"
     if key == "llm_model":
         if not value.strip() or "****" in value:

@@ -539,6 +539,7 @@ const SECRET_KEYS = new Set([
   'oncall_llm_api_key',
   'notify_webhook_token',
   'event_ingest_token',
+  'llm_local_api_key',
 ]);
 
 /** Agent 独立接入配置键（provider / Base URL / API Key，留空逐项继承全局） */
@@ -566,6 +567,15 @@ const SELECT_OPTIONS: Record<string, { value: string; labelKey: string }[]> = {
   llm_provider: [
     { value: 'atoms_hub', labelKey: 'ops.config.selectOptions.atomsHub' },
     { value: 'openai_compatible', labelKey: 'ops.config.selectOptions.openaiCompatible' },
+  ],
+  llm_routing_policy: [
+    { value: 'auto', labelKey: 'ops.config.selectOptions.routingAuto' },
+    { value: 'local_only', labelKey: 'ops.config.selectOptions.routingLocalOnly' },
+    { value: 'remote_only', labelKey: 'ops.config.selectOptions.routingRemoteOnly' },
+  ],
+  data_masking_enabled: [
+    { value: 'true', labelKey: 'ops.config.selectOptions.maskingOn' },
+    { value: 'false', labelKey: 'ops.config.selectOptions.maskingOff' },
   ],
   diagnose_llm_provider: [
     { value: INHERIT_SENTINEL, labelKey: 'ops.config.selectOptions.inheritGlobal' },
@@ -627,6 +637,14 @@ const CONFIG_GROUPS: { id: string; keys: string[]; testable?: boolean; agent?: s
   {
     id: 'integration',
     keys: ['notify_webhook_url', 'notify_webhook_token', 'event_ingest_token'],
+  },
+  {
+    id: 'llmRouting',
+    keys: ['llm_routing_policy', 'llm_remote_approval_id', 'llm_local_base_url', 'llm_local_model', 'llm_local_api_key'],
+  },
+  {
+    id: 'dataMasking',
+    keys: ['data_masking_enabled'],
   },
   {
     id: 'policy',

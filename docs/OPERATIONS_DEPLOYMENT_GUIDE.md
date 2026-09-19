@@ -659,3 +659,95 @@ curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts/batch \
 curl -X POST http://127.0.0.1:8000/api/v1/console/notify/test -H "Authorization: Bearer <token>"
 # 期望：{"ok":true,"status_code":200,"latency_ms":32,"error":null,"url":"...","sample_payload":{...}}
 ```
+
+## 24. 混合 LLM 路由与合规审计（评审采纳项）
+
+诊断链路（单轮一键诊断 + 深度诊断 Agent 及其降级路径）在每次 LLM 调用前执行三维路由决策（`app/backend/services/llm_routing.py`），敏感数据绝不送远程 LLM。
+
+### 24.1 三维路由决策
+
+| 维度 | 判定依据 | 决策 |
+|------|----------|------|
+| 数据敏感度 | detect_sensitivity：密钥赋值 / Bearer Token / 内网 IP（含掩码占位 `a.b.c.x`）/ 手机号 / 身份证 / 长数字 / 邮箱 / 长令牌 / 掩码占位符 | 敏感 → 强制本地 |
+| 告警等级 | events.severity | critical → 本地保守处理 |
+| 服务等级 | CMDB 资产 environment（prod / production） | 生产 → 本地保守处理 |
+
+- 策略 `llm_routing_policy`：
+  - `auto`（默认）：非敏感 + 非 critical + 非生产 + 远程审批编号已配置 → 远程；任一不满足 → 本地；
+  - `local_only`：全部本地，本地未部署时降级确定性结论；
+  - `remote_only`：全部远程，但敏感数据仍强制本地（红线优先）。
+- 红线双保险：`llm_remote_approval_id` 留空时，任何策略下的远程路由都被拒绝并回退本地。
+- 敏感数据 + 本地 LLM 未配置：跳过所有 LLM 调用，直接以知识库候选构造确定性结论（根因前缀「敏感数据不出域·确定性结论」，`degraded_reason=sensitive_local_unavailable_deterministic`），绝不回退远程。
+
+### 24.2 本地 LLM 接入（Ollama / vLLM，OpenAI 兼容接口）
+
+配置中心「混合 LLM 路由」分组（sys_admin）：
+
+| 键 | 说明 |
+|----|------|
+| llm_local_base_url | OpenAI 兼容本地网关地址（Ollama：`http://ollama:11434/v1`；vLLM：`http://vllm:8000/v1`） |
+| llm_local_model | 本地模型名（Ollama 如 `qwen2.5:14b`、`deepseek-r1:14b`；vLLM 如 `Qwen2.5-14B-Instruct`） |
+| llm_local_api_key | 本地网关 API Key（Ollama/vLLM 通常留空匿名访问；加密存储、脱敏展示） |
+| llm_routing_policy | auto / local_only / remote_only（默认 auto） |
+| llm_remote_approval_id | 远程数据出域合规审批编号（留空拒绝远程路由） |
+
+Ollama 部署与冒烟示例：
+
+```bash
+docker run -d --name ollama -p 11434:11434 ollama/ollama
+docker exec ollama ollama pull qwen2.5:14b
+# OpenAI 兼容接口冒烟
+curl http://<ollama-host>:11434/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"qwen2.5:14b","messages":[{"role":"user","content":"ping"}]}'
+```
+
+vLLM 部署与冒烟示例：
+
+```bash
+pip install vllm
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-14B-Instruct --port 8000
+curl http://<vllm-host>:8000/v1/models
+```
+
+### 24.3 合规审计哈希链与防篡改校验
+
+- 路由决策（`llm_route_decision`）与 LLM 调用（`llm_invocation`）两类审计记录构成哈希链：复用现有 `audit_logs` 表（链字段存 `after_json.chain` 的 `prev_hash` / `hash`，**不改表结构**），`hash = sha256(prev_hash | actor | action | target_type | target_id | after 规范化 JSON)`；审计内容仅记录敏感类别标签与路由元信息，不含原始告警文本。
+- 防篡改校验（sys_admin）：任一记录 `after_json` 被篡改 → 整链校验失败并定位首条断链记录。
+
+```bash
+curl http://127.0.0.1:8000/api/v1/console/audit-logs/chain-verify -H "Authorization: Bearer <token>"
+# 期望：{"ok":true,"total":N,"head_hash":"...","broken_id":null}
+```
+
+### 24.4 路由行为验证
+
+```bash
+# 敏感告警入站（含卡号/手机号）→ 脱敏落库 → 诊断触发路由决策
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts -H "Content-Type: application/json" \
+  -d '{"source":"webhook","event_id":"E2E-ROUTE-1","service_name":"payments","error_type":"payment","severity":"warning","raw_message":"payment declined card 6222020200112233 phone 13812345678"}'
+# 查询路由决策审计（需登录态）
+curl "http://127.0.0.1:8000/api/v1/console/audit-logs?action=llm_route_decision" -H "Authorization: Bearer <token>"
+# 期望：after.route=local、after.sensitive=true、reasons 含「绝不送远程」
+```
+
+## 25. 数据分级与入站脱敏（评审采纳项）
+
+事件同步入口（`POST /api/v1/ingest/alerts`）默认开启入站脱敏（`data_masking_enabled=true`）：原始告警文本在落库前经 `mask_alert_text` 掩码，**原始内容不落库**。
+
+| 类别 | 示例 | 掩码后 |
+|------|------|--------|
+| 身份证 | 11010119900307851X | 110****851X |
+| 手机号 | 13812345678 | 138****5678 |
+| 银行卡/长数字（15~19 位） | 6222020200112233 | 6222****2233 |
+| 内网 IP | 10.1.2.3 / 192.168.1.100 | 10.1.2.x / 192.168.1.x |
+| 密钥赋值 | password=Sup3rSecret | password=*** |
+| Bearer Token | Bearer abc.def-ghi | Bearer *** |
+| 邮箱 | user@example.com | ***@*** |
+| 长令牌（≥32 位） | eyJhbGciOiJSUzI1NiJ9... | *** |
+
+- 掩码占位符保留可识别格式，`detect_sensitivity` 可对已落库文本二次判定敏感度并驱动 LLM 路由（§24.1）；
+- 公网 IP 与主机名保留（诊断与 CMDB 关联需要）；
+- 显式配置 `data_masking_enabled=false` 才会原文落库（部署方显式选择，`event_ingest` 审计 `data_masking_enabled=false` 可追溯）；
+- 验证：推送含敏感字段告警后查询事件详情，`raw_log` 应只见掩码占位符。
+
+专项回归：`app/backend/tests/test_llm_routing_compliance.py`（15 项：路由矩阵 / 敏感不出域 / 脱敏逐类 / 哈希链防篡改 / ingest 集成 / 路由透传）。

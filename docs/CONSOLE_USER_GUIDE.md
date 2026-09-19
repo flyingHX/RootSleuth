@@ -132,6 +132,10 @@
 | notify_webhook_url | 诊断后通知回调地址（http(s) 开头，如 ITSM/UMPS webhook；留空不推送） |
 | notify_webhook_token | 通知回调 Bearer Token（加密存储、脱敏展示；留空不携带鉴权头） |
 | event_ingest_token | 事件同步入口 X-Ingest-Token 鉴权令牌（加密存储、脱敏展示；留空放行） |
+| llm_local_base_url / llm_local_model / llm_local_api_key | 本地 LLM OpenAI 兼容接入（Ollama / vLLM）：Base URL + 模型名 + API Key（Ollama/vLLM 通常留空匿名；加密存储、脱敏展示；属「混合 LLM 路由」分组） |
+| llm_routing_policy | LLM 混合路由策略：auto（默认，按敏感度/告警等级/服务等级三维决策）/ local_only（全部本地）/ remote_only（全部远程，敏感数据仍强制本地） |
+| llm_remote_approval_id | 远程 LLM 数据出域合规审批编号（留空时远程路由被拒绝，一律本地或确定性降级） |
+| data_masking_enabled | 入站数据脱敏开关（默认 true：告警文本落库前掩码，原始内容不落库；脱敏判定同时驱动 LLM 路由敏感度） |
 
 - 修改即时生效并写 `config_update` 审计。三个 Agent 分组均提供「测试连通性」按钮（`POST /api/v1/console/configs/llm-test?agent=diagnose|kb_governance|oncall`），返回按继承规则解析后的实际模型/超时/接入方式与 `access_source`（agent=独立配置生效 / global=继承全局），API Key 永不回显。
 
@@ -160,6 +164,24 @@ curl -X POST http://<console-host>:8000/api/v1/ingest/alerts \
 - 「集成与通知」分组提供「测试连通性」按钮（`POST /api/v1/console/notify/test`，sys_admin）：向回调地址发送样例载荷并返回状态码/耗时，用于上线前验证外部系统可达性。
 
 字段映射表与 UMPS/ITSM 映射建议（运维视角）见 `docs/OPERATIONS_DEPLOYMENT_GUIDE.md` §23。
+
+### 混合 LLM 路由与合规审计
+
+诊断（单轮一键诊断与深度诊断 Agent）在每次 LLM 调用前执行三维路由决策：**数据敏感度 → 告警等级 → 服务等级**。
+
+- 敏感数据（含脱敏占位符识别）一律强制本地 LLM，**绝不送远程**；本地 LLM 未部署时自动降级为「确定性结论」（复用知识库候选，根因前缀「敏感数据不出域·确定性结论」），同样不回退远程。
+- `auto` 策略下，非敏感 + 非 critical + 非生产环境（CMDB）+ 已配置远程审批编号（`llm_remote_approval_id`）才走远程；任一不满足保守走本地。`llm_remote_approval_id` 留空时远程路由被直接拒绝（红线双保险）。
+- 本地 LLM 经 OpenAI 兼容接口接入（Ollama / vLLM），在配置中心「混合 LLM 路由」分组填写 Base URL / 模型名 / API Key（部署示例见 `docs/OPERATIONS_DEPLOYMENT_GUIDE.md` §24）。
+- 每次路由决策与 LLM 调用写入**合规审计哈希链**（动作 `llm_route_decision` / `llm_invocation`，链哈希存审计记录 `after_json.chain`），可在审计日志按动作筛选；sys_admin 可调用防篡改校验端点：
+
+```bash
+curl http://<console-host>:8000/api/v1/console/audit-logs/chain-verify -H "Authorization: Bearer <token>"
+# 期望：{"ok":true,"total":N,"head_hash":"...","broken_id":null}
+```
+
+### 数据分级与脱敏
+
+「数据分级与脱敏」分组的 `data_masking_enabled`（默认开启）控制事件同步入口的入站脱敏：开启后，外部推送的告警文本在落库前对身份证 / 手机号 / 银行卡号 / 内网 IP / 密钥赋值 / Bearer Token / 邮箱 / 长令牌掩码（如 `138****5678`、`10.1.2.x`），**原始内容不落库**；掩码占位符保留可识别格式，路由敏感度判定不受影响。公网 IP 与主机名保留以满足诊断关联需要。`event_ingest` 审计记录 `data_masking_enabled` / `masked` / `sensitivity_categories` 供追溯。
 
 ### 知识健康风险闭环（kb_admin 及以上）
 

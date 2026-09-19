@@ -170,6 +170,8 @@ export interface DiagnosisResult {
     model: string;
     low_confidence: boolean;
     threshold: number;
+    /** 混合 LLM 路由结果（local / remote / deterministic） */
+    route?: string;
   } | null;
 }
 

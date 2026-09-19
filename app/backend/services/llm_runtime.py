@@ -41,6 +41,7 @@ SECRET_CONFIG_KEYS = (
     "diagnose_llm_api_key",
     "kb_governance_llm_api_key",
     "oncall_llm_api_key",
+    "llm_local_api_key",
     "notify_webhook_token",
     "event_ingest_token",
 )
@@ -108,7 +109,7 @@ def mask_secret(plain: str) -> str:
     return f"{plain[:4]}****{plain[-4:]}"
 
 
-async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None) -> Dict[str, Any]:
+async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None, route: Optional[str] = None) -> Dict[str, Any]:
     """读取 LLM 运行时配置（每次实时读库，变更立即生效）。
 
     agent 传入三个业务 Agent 作用域（diagnose / kb_governance / oncall）时，
@@ -118,6 +119,10 @@ async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None) -> Dic
     - 模型：留空继承全局 llm_model；
     - 温度：kb_governance / oncall 留空或非法继承全局 llm_temperature；
       diagnose 独立语义（diagnose_temperature，默认 0 确定性优先，非法回退 0）。
+
+    route="local" 时强制走本地 LLM（混合路由敏感数据不出域）：provider 固定
+    openai_compatible，base_url/api_key/model 取 llm_local_* 配置；本地未配置
+    （base_url 或 model 为空）抛 RuntimeError，由路由层保证不会误入此分支。
     """
     provider = ((await get_config(db, "llm_provider", "atoms_hub")) or "atoms_hub").strip()
     base_url = (await get_config(db, "llm_base_url", "")).strip()
@@ -165,6 +170,20 @@ async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None) -> Dic
                     )
                 else:
                     temperature = min(max(scoped_temperature, 0.0), 2.0)
+    if route == "local":
+        local_base_url = (await get_config(db, "llm_local_base_url", "")).strip()
+        local_model = (await get_config(db, "llm_local_model", "")).strip()
+        local_api_key = decrypt_secret(await get_config(db, "llm_local_api_key", ""))
+        if not (local_base_url and local_model):
+            raise RuntimeError("本地 LLM 路由不可用：请先在配置中心填写 llm_local_base_url 与 llm_local_model")
+        return {
+            "provider": "openai_compatible",
+            "base_url": local_base_url,
+            "api_key": local_api_key,
+            "model": local_model,
+            "temperature": temperature,
+            "access_source": "local",
+        }
     return {
         "provider": provider,
         "base_url": base_url,
@@ -175,11 +194,14 @@ async def get_llm_settings(db: AsyncSession, agent: Optional[str] = None) -> Dic
     }
 
 
-async def get_llm_model_name(db: AsyncSession, agent: Optional[str] = None) -> str:
+async def get_llm_model_name(db: AsyncSession, agent: Optional[str] = None, route: Optional[str] = None) -> str:
     """轻量接口：仅返回当前 Chat 模型名（用于会话/审计记录）。
 
-    agent 作用域下优先返回 <agent>_llm_model 独立配置，留空回退全局 llm_model。
+    agent 作用域下优先返回 <agent>_llm_model 独立配置，留空回退全局 llm_model；
+    route="local" 时返回本地 LLM 模型名（llm_local_model）。
     """
+    if route == "local":
+        return (await get_config(db, "llm_local_model", "")).strip() or "local-llm"
     if agent in AGENT_CONFIG_SCOPES:
         scoped_model = (await get_config(db, f"{agent}_llm_model", "")).strip()
         if scoped_model:
@@ -243,14 +265,17 @@ async def llm_chat(
     max_tokens: int = 1600,
     timeout: Optional[float] = None,
     agent: Optional[str] = None,
+    route: Optional[str] = None,
 ) -> GenTxtResponse:
     """统一 LLM Chat 入口：控制台配置驱动，atoms_hub 回退平台 AIHub。
 
     agent 传入业务 Agent 作用域时，模型/温度/超时按 <agent>_* 独立配置解析
     （留空逐项回退全局 llm_* 配置）；显式传入 model/temperature/timeout 仍然优先。
+    route="local" 时强制走本地 LLM（llm_local_* 配置，混合路由敏感数据不出域），
+    本地未配置抛 RuntimeError；路由决策由 services/llm_routing.py 统一做出。
     超时抛出 asyncio.TimeoutError，降级语义由调用方决定。
     """
-    settings_ = await get_llm_settings(db, agent=agent)
+    settings_ = await get_llm_settings(db, agent=agent, route=route)
     use_model = (model or settings_["model"]).strip()
     use_temperature = settings_["temperature"] if temperature is None else temperature
     if timeout is None:

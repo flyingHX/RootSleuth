@@ -902,6 +902,11 @@ const enUS = {
         roleSre: 'sre (on-call)',
         roleApprover: 'approver (approvals)',
         roleKbAdmin: 'kb_admin (KB administrator)',
+        routingAuto: 'Smart routing (auto)',
+        routingLocalOnly: 'Local only (local_only)',
+        routingRemoteOnly: 'Remote only (remote_only)',
+        maskingOn: 'On (mask before persisting)',
+        maskingOff: 'Off (skip masking)',
       },
       labels: {
         llm_provider: 'LLM Access Mode',
@@ -935,6 +940,12 @@ const enUS = {
         notify_webhook_url: 'Notification webhook URL',
         notify_webhook_token: 'Notification webhook token',
         event_ingest_token: 'Event ingest token',
+        llm_routing_policy: 'LLM Routing Policy',
+        llm_remote_approval_id: 'Remote processing approval ID',
+        llm_local_base_url: 'Local LLM Base URL',
+        llm_local_model: 'Local LLM Model',
+        llm_local_api_key: 'Local LLM API Key',
+        data_masking_enabled: 'Inbound data masking',
         approval_mode: 'Approval Mode',
         confidence_threshold: 'Confidence threshold',
         rerank_weight_json: 'Rerank weights JSON',
@@ -966,6 +977,14 @@ const enUS = {
         integration: {
           title: 'Integrations & Notifications',
           hint: 'The notification webhook URL receives root-cause/solution pushes after diagnosis (e.g., an ITSM webhook); the event ingest token guards pipeline-to-console alert syncing (X-Ingest-Token header, empty means open access). Tokens are stored encrypted and shown masked.',
+        },
+        llmRouting: {
+          title: 'Hybrid LLM Routing',
+          hint: 'Three-dimension routing (data sensitivity / alert severity / service tier): sensitive data is always processed by the local LLM and never sent to a remote provider; auto mode routes to remote only when non-sensitive, non-critical, non-production and a remote processing approval ID is present; local access uses an OpenAI-compatible endpoint (e.g., Ollama / vLLM); when the local LLM is unavailable, a deterministic conclusion is produced instead of a remote call.',
+        },
+        dataMasking: {
+          title: 'Data Classification & Masking',
+          hint: 'When enabled (default), inbound alert text is masked before persistence: ID numbers, phone numbers, bank card numbers, internal IPs, key/token strings and emails are replaced with format-preserving placeholders; the raw content is never stored, and the masked text drives routing decisions.',
         },
         policy: {
           title: 'Diagnosis & Approval Policy',

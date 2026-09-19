@@ -72,7 +72,7 @@ def _seed_event(session: AsyncSession) -> Events:
         service_name="orders",
         cluster="c1",
         severity="critical",
-        raw_log="OOMKilled pod orders Memory cgroup limit exceeded node 10.0.0.5",
+        raw_log="OOMKilled pod orders Memory cgroup limit exceeded node 93.184.216.34",
         topology="",
         status="pending",
     )
@@ -225,8 +225,10 @@ async def test_repeat_diagnose_agent_success_consistency(db_session, monkeypatch
     assert snap1["kb_candidates"]["local_ids"] == ["kb-a", "kb-b"]
     assert snap1["kb_candidates"]["local_ids"] == snap1["kb_candidates"]["merged_ids"]
     assert snap1["rule_version"] == 1
+    # 混合 LLM 路由语义：critical 事件经三维决策强制本地处理，
+    # 模型名取 llm_local_model（未配置时回退 local-llm）
     assert snap1["model_params"] == {
-        "model": "deepseek-v4-flash",
+        "model": "local-llm",
         "temperature": 0.0,
         "timeout_seconds": 45,
         "time_budget_seconds": 90.0,

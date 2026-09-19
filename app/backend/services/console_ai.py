@@ -26,7 +26,8 @@ from models.Events import Events
 from models.kb_cases import Kb_cases
 from schemas.aihub import ChatMessage
 from services import llm_runtime
-from services.console_common import get_config, write_audit, now_iso
+from services import llm_routing
+from services.console_common import get_config, write_audit, write_audit_chained, now_iso
 from services.notify_service import notify_after_diagnosis
 from services.quality_scan import evaluate_diagnosis_quality
 
@@ -302,70 +303,105 @@ async def run_diagnosis(
     await db.commit()
     top_score = candidates[0]["score"]
 
-    # 单轮诊断/降级路径沿用深度诊断 Agent 的独立 LLM 配置（模型/温度/超时，留空继承全局）
+    # 混合 LLM 路由（评审采纳项）：敏感度/告警等级/服务等级三维决策，敏感数据绝不送远程；
+    # 决策记录写入合规审计哈希链（llm_route_decision）
+    route_decision = await llm_routing.decide_llm_route(db, event)
+    route = route_decision["route"]
+
+    # 单轮诊断/降级路径沿用深度诊断 Agent 的独立 LLM 配置（模型/温度/超时，留空继承全局）；
+    # 本地路由时模型名取 llm_local_model（route="local"）
     timeout_seconds = int(await llm_runtime.get_llm_timeout(db, "diagnose"))
-    model_name = await llm_runtime.get_llm_model_name(db, agent="diagnose")
+    model_name = await llm_runtime.get_llm_model_name(
+        db, agent="diagnose", route="local" if route == "local" else None
+    )
     messages = build_messages(event, candidates)
     diagnosis: Optional[Dict[str, Any]] = None
     last_error = ""
-    try:
-        for attempt in range(2):
-            # 墙钟预算（Cloudflare 502 防护）：每次尝试前按剩余预算截断单次调用超时；
-            # 预算不足以完成"LLM 调用 + 持久化"时返回结构化 502，不再发起调用
-            remaining = deadline - time.perf_counter() - _SINGLE_PERSIST_RESERVE_SECONDS
-            if remaining < _SINGLE_MIN_LLM_SECONDS:
-                raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        f"诊断墙钟预算耗尽（diagnose_time_budget_exhausted，剩余 {remaining:.1f}s），"
-                        "请稍后重试或在配置中心调大 diagnose_time_budget_seconds"
-                    ),
-                )
-            try:
-                response = await llm_runtime.llm_chat(
-                    db,
-                    messages,
-                    max_tokens=1200,
-                    timeout=min(timeout_seconds, max(1, int(remaining))),
-                    agent="diagnose",
-                )
-                payload = extract_json_payload(response.content)
-                diagnosis = validate_diagnosis(payload)
-                if diagnosis is not None:
-                    break
-                last_error = "模型输出不是合法的诊断 JSON"
-                messages = list(messages) + [
-                    ChatMessage(
-                        role="user",
-                        content=(
-                            f"你上一次的输出无法通过 JSON 校验（{last_error}）。"
-                            "请重新输出，且只输出一个符合字段要求的 JSON 对象。"
+    deterministic_reason: Optional[str] = None
+    # 敏感数据红线：本地 LLM 未配置时不发起任何调用，直接降级确定性结论（绝不送远程）
+    if route == "local" and route_decision["sensitive"] and not route_decision["local_configured"]:
+        deterministic_reason = "sensitive_local_unavailable_deterministic"
+        # 预构建确定性结论：跳过 LLM 的同时保证 diagnosis 可用（绝不送远程）
+        pre_built = llm_routing.build_deterministic_diagnosis(candidates)
+        if pre_built is not None:
+            diagnosis = pre_built
+        else:
+            last_error = "本地 LLM 未配置且知识库候选无可复用结论"
+
+    if deterministic_reason is None:
+        try:
+            for attempt in range(2):
+                # 墙钟预算（Cloudflare 502 防护）：每次尝试前按剩余预算截断单次调用超时；
+                # 预算不足以完成"LLM 调用 + 持久化"时返回结构化 502，不再发起调用
+                remaining = deadline - time.perf_counter() - _SINGLE_PERSIST_RESERVE_SECONDS
+                if remaining < _SINGLE_MIN_LLM_SECONDS:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            f"诊断墙钟预算耗尽（diagnose_time_budget_exhausted，剩余 {remaining:.1f}s），"
+                            "请稍后重试或在配置中心调大 diagnose_time_budget_seconds"
                         ),
                     )
-                ]
-            except asyncio.TimeoutError:
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"LLM 诊断超时（>{timeout_seconds}s），请稍后重试或调大 diagnose_llm_timeout_seconds（或全局 llm_timeout_seconds）配置",
+                try:
+                    response = await llm_runtime.llm_chat(
+                        db,
+                        messages,
+                        max_tokens=1200,
+                        timeout=min(timeout_seconds, max(1, int(remaining))),
+                        agent="diagnose",
+                        route=route,
+                    )
+                    payload = extract_json_payload(response.content)
+                    diagnosis = validate_diagnosis(payload)
+                    if diagnosis is not None:
+                        break
+                    last_error = "模型输出不是合法的诊断 JSON"
+                    messages = list(messages) + [
+                        ChatMessage(
+                            role="user",
+                            content=(
+                                f"你上一次的输出无法通过 JSON 校验（{last_error}）。"
+                                "请重新输出，且只输出一个符合字段要求的 JSON 对象。"
+                            ),
+                        )
+                    ]
+                except asyncio.TimeoutError:
+                    raise HTTPException(
+                        status_code=504,
+                        detail=f"LLM 诊断超时（>{timeout_seconds}s），请稍后重试或调大 diagnose_llm_timeout_seconds（或全局 llm_timeout_seconds）配置",
+                    )
+        except HTTPException as exc:
+            if route == "local" and route_decision["sensitive"]:
+                # 敏感数据红线：本地调用失败（预算耗尽/超时）降级确定性结论，绝不回退远程
+                deterministic = llm_routing.build_deterministic_diagnosis(candidates)
+                if deterministic is not None:
+                    diagnosis = deterministic
+                    deterministic_reason = "sensitive_local_unavailable_deterministic"
+            if deterministic_reason is None:
+                event.rag_status = _DEGRADED_RAG_STATUS
+                # 预算耗尽（502）与 LLM 超时（504）都经此持久化降级状态，原因按 detail 区分
+                event.degraded_reason = (
+                    "diagnose_time_budget_exhausted"
+                    if "diagnose_time_budget_exhausted" in str(exc.detail)
+                    else "llm_timeout"
                 )
-    except HTTPException as exc:
-        event.rag_status = _DEGRADED_RAG_STATUS
-        # 预算耗尽（502）与 LLM 超时（504）都经此持久化降级状态，原因按 detail 区分
-        event.degraded_reason = (
-            "diagnose_time_budget_exhausted"
-            if "diagnose_time_budget_exhausted" in str(exc.detail)
-            else "llm_timeout"
-        )
-        event.confidence = None
-        event.ai_root_cause = None
-        await db.commit()
-        raise
-    except Exception as exc:  # noqa: BLE001 - AI 调用失败必须显式可重试
-        logger.error("Diagnosis LLM call failed: %s", exc)
-        event.rag_status = _DEGRADED_RAG_STATUS
-        event.degraded_reason = f"llm_error: {type(exc).__name__}"
-        await db.commit()
-        raise HTTPException(status_code=502, detail=f"AI 诊断调用失败：{exc}，请点击重试")
+                event.confidence = None
+                event.ai_root_cause = None
+                await db.commit()
+                raise
+        except Exception as exc:  # noqa: BLE001 - AI 调用失败必须显式可重试
+            logger.error("Diagnosis LLM call failed: %s", exc)
+            if route == "local" and route_decision["sensitive"]:
+                # 敏感数据红线：本地调用异常时降级确定性结论，绝不回退远程
+                deterministic = llm_routing.build_deterministic_diagnosis(candidates)
+                if deterministic is not None:
+                    diagnosis = deterministic
+                    deterministic_reason = "sensitive_local_unavailable_deterministic"
+            if deterministic_reason is None:
+                event.rag_status = _DEGRADED_RAG_STATUS
+                event.degraded_reason = f"llm_error: {type(exc).__name__}"
+                await db.commit()
+                raise HTTPException(status_code=502, detail=f"AI 诊断调用失败：{exc}，请点击重试")
 
     if diagnosis is None:
         event.rag_status = _DEGRADED_RAG_STATUS
@@ -390,7 +426,10 @@ async def run_diagnosis(
     event.ai_output_json = json.dumps({**diagnosis, "quality": quality}, ensure_ascii=False)
     event.confidence = diagnosis["confidence"]
     event.status = "diagnosed"
-    if diagnosis["confidence"] < threshold:
+    if deterministic_reason:
+        # 敏感数据不出域·确定性结论：降级原因优先于低置信度标记，前端可辨识该路径
+        event.degraded_reason = deterministic_reason
+    elif diagnosis["confidence"] < threshold:
         event.degraded_reason = f"low_confidence(<{threshold})"
     else:
         event.degraded_reason = None
@@ -411,6 +450,25 @@ async def run_diagnosis(
             "low_confidence": diagnosis["confidence"] < threshold,
             "trust_index": quality["trust_index"],
             "quality_ok": quality["quality_ok"],
+            "elapsed_ms": elapsed_ms,
+        },
+    )
+
+    # 合规审计哈希链（评审采纳项）：LLM 调用记录入链（llm_invocation），
+    # 与路由决策记录（llm_route_decision）共同构成可追溯、防篡改的证据链
+    await write_audit_chained(
+        db,
+        actor=actor,
+        action="llm_invocation",
+        target_type="event",
+        target_id=event.id,
+        after={
+            "source": "single_round",
+            "route": "deterministic_fallback" if deterministic_reason else route,
+            "deterministic_reason": deterministic_reason,
+            "model": model_name,
+            "confidence": diagnosis["confidence"],
+            "sensitive": bool(route_decision["sensitive"]),
             "elapsed_ms": elapsed_ms,
         },
     )
@@ -445,6 +503,7 @@ async def run_diagnosis(
         "diagnosis": {
             **diagnosis,
             "model": model_name,
+            "route": "deterministic_fallback" if deterministic_reason else route,
             "low_confidence": diagnosis["confidence"] < threshold,
             "threshold": threshold,
         },

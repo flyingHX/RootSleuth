@@ -39,7 +39,7 @@ from models.oncall_reports import Oncall_reports
 from models.rule_versions import Rule_versions
 from schemas.aihub import ChatMessage
 from schemas.auth import UserResponse
-from services import console_kb, llm_runtime
+from services import console_kb, llm_routing, llm_runtime
 from services.console_ai import (
     extract_json_payload,
     run_diagnosis,
@@ -181,6 +181,7 @@ async def _llm_chat(
     temperature: Optional[float] = None,
     timeout: Optional[int] = None,
     agent: Optional[str] = None,
+    route: Optional[str] = None,
 ):
     """LLM Chat：模型/温度/接入方式由控制台配置中心驱动（llm_runtime）。
 
@@ -188,11 +189,12 @@ async def _llm_chat(
     保证同一事件重复深度诊断的输出与质量指标稳定（波动治理）。
     timeout 显式传入时覆盖配置中心 llm_timeout_seconds：强制收尾阶段按剩余
     墙钟预算截断单次调用超时，避免收尾调用越过整体预算。
+    route="local" 时强制走本地 LLM（混合路由敏感数据不出域，决策由 llm_routing 做出）。
     """
     if timeout is None:
         timeout = int(await llm_runtime.get_llm_timeout(db, agent))
     return await llm_runtime.llm_chat(
-        db, messages, max_tokens=max_tokens, timeout=timeout, temperature=temperature, agent=agent
+        db, messages, max_tokens=max_tokens, timeout=timeout, temperature=temperature, agent=agent, route=route
     )
 
 
@@ -393,10 +395,12 @@ async def _run_react(
     tools: Dict[str, ToolHandler],
     temperature: Optional[float] = None,
     deadline: Optional[float] = None,
+    route: Optional[str] = None,
 ) -> Dict[str, Any]:
     """ReAct 多轮循环：模型输出动作 → 执行工具 → 回填观察，直至 finish 或超限。
 
     temperature 透传给全部 LLM 调用（含超限强制收尾），诊断 Agent 传 0 保证确定性。
+    route 透传给全部 LLM 调用（混合路由：敏感数据强制本地，绝不送远程）。
     deadline 为墙钟时间预算的绝对时刻（perf_counter）：余量不足时停止继续推理转入
     强制收尾（trace 记录 budget_exceeded），整体耗时不再随 LLM 变慢无限叠加；
     循环内每次 LLM 调用的超时按剩余预算截断（_remaining_llm_timeout），防止
@@ -439,6 +443,7 @@ async def _run_react(
             temperature=temperature,
             timeout=_remaining_llm_timeout(deadline, cfg_timeout),
             agent="diagnose",
+            route=route,
         )
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
@@ -503,7 +508,7 @@ async def _run_react(
 
     # 超限强制收尾：独立收尾函数（最多重试 2 次），避免单次输出抖动导致整体失败
     return await _conclude_react(
-        db, messages, trace, iterations, started, usage_acc, temperature=temperature, deadline=deadline
+        db, messages, trace, iterations, started, usage_acc, temperature=temperature, deadline=deadline, route=route
     )
 
 
@@ -516,6 +521,7 @@ async def _conclude_react(
     usage_acc: Dict[str, int],
     temperature: Optional[float] = None,
     deadline: Optional[float] = None,
+    route: Optional[str] = None,
 ) -> Dict[str, Any]:
     """超限强制收尾：要求模型基于已有观察立即输出 finish JSON（最多重试 2 次）。
 
@@ -543,7 +549,9 @@ async def _conclude_react(
             if remaining < DIAGNOSE_MIN_CONCLUDE_SECONDS:
                 raise ValueError("agent_time_budget_exhausted")
             llm_timeout = max(DIAGNOSE_MIN_CONCLUDE_SECONDS, min(cfg_timeout, int(remaining)))
-        response = await _llm_chat(db, final_messages, temperature=temperature, timeout=llm_timeout, agent="diagnose")
+        response = await _llm_chat(
+            db, final_messages, temperature=temperature, timeout=llm_timeout, agent="diagnose", route=route
+        )
         _record_usage(trace, getattr(response, "usage", None), usage_acc)
         payload = extract_json_payload(response.content)
         if payload is not None and payload.get("finish"):
@@ -1042,8 +1050,15 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
         raise HTTPException(status_code=404, detail="事件不存在")
 
     tools = _build_diagnose_tools(db, event)
-    # 深度诊断 Agent 独立 LLM 配置：diagnose_llm_model / diagnose_llm_timeout_seconds，留空继承全局
-    model_name = await llm_runtime.get_llm_model_name(db, agent="diagnose")
+    # 混合 LLM 路由（评审采纳项）：敏感度/告警等级/服务等级三维决策，敏感数据绝不送远程；
+    # 决策记录写入合规审计哈希链（llm_route_decision），route 透传 ReAct 全链路 LLM 调用
+    route_decision = await llm_routing.decide_llm_route(db, event)
+    route = route_decision["route"]
+    # 深度诊断 Agent 独立 LLM 配置：diagnose_llm_model / diagnose_llm_timeout_seconds，留空继承全局；
+    # 本地路由时模型名取 llm_local_model（route="local"）
+    model_name = await llm_runtime.get_llm_model_name(
+        db, agent="diagnose", route="local" if route == "local" else None
+    )
     # 波动治理：诊断 Agent 固定采样温度（diagnose_temperature，默认 0），重复诊断输出稳定
     diagnose_temperature = await _resolve_diagnose_temperature(db)
     task_prompt = (
@@ -1066,6 +1081,7 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
             tools,
             temperature=diagnose_temperature,
             deadline=deadline,
+            route=route,
         )
         conclusion = _validate_diagnose_result(loop_result["result"], loop_result["trace"])
         if conclusion is None:
@@ -1172,6 +1188,8 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
             after={
                 "session_id": row.id,
                 "model": model_name,
+                "route": route,
+                "sensitive": bool(route_decision["sensitive"]),
                 "iterations": loop_result["iterations"],
                 "confidence": conclusion["confidence"],
                 "usage": usage_summary,
@@ -1244,7 +1262,13 @@ async def run_diagnose_agent(db: AsyncSession, user: UserResponse, event_id: int
         action="agent_diagnose",
         target_type="event",
         target_id=event.id,
-        after={"session_id": row.id, "status": status, "error": loop_error},
+        after={
+            "session_id": row.id,
+            "status": status,
+            "error": loop_error,
+            "route": route,
+            "sensitive": bool(route_decision["sensitive"]),
+        },
     )
     if fallback is not None:
         return {

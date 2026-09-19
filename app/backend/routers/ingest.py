@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
 from models.Events import Events
-from services.console_common import get_config, write_audit
+from services.console_common import detect_sensitivity, get_config, mask_alert_text, write_audit
 from services.llm_runtime import decrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -230,8 +230,17 @@ async def _ingest_one(
     token_checked: bool = False,
     seen_event_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """标准化 → 幂等检查 → 入库（status=pending）→ 审计，返回单条结果。"""
+    """标准化 → 幂等检查 → 入库（status=pending）→ 审计，返回单条结果。
+
+    入站脱敏（评审采纳项）：data_masking_enabled=true（默认）时，原始告警文本
+    在落库前经 mask_alert_text 掩码（证件/手机号/银行卡/内网 IP/密钥/令牌），
+    原始内容不落库；掩码占位符保留可识别格式（138****5678、10.1.2.x），
+    detect_sensitivity 仍可对落库文本二次判定敏感度并驱动 LLM 路由。
+    """
     source = (body.source or "webhook").strip() or "webhook"
+    masking_enabled = ((await get_config(db, "data_masking_enabled", "true")) or "true").strip().lower() != "false"
+    if masking_enabled and (body.raw_message or "").strip():
+        body.raw_message = mask_alert_text(body.raw_message)
     kwargs, event_id = _standardize(body, source)
     if seen_event_ids is not None and event_id in seen_event_ids:
         return {"event_id": event_id, "result": "duplicated"}
@@ -271,6 +280,9 @@ async def _ingest_one(
             "severity": kwargs["severity"],
             "template": kwargs.get("template"),
             "token_checked": token_checked,
+            "data_masking_enabled": masking_enabled,
+            "masked": masking_enabled and bool(body.raw_message),
+            "sensitivity_categories": detect_sensitivity(kwargs.get("raw_log") or "")[1],
         },
     )
     return {"event_id": event_id, "result": "accepted"}

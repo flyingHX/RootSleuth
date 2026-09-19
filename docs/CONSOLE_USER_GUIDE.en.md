@@ -132,6 +132,10 @@ The same semantics apply to the **Agent Workbench**: deep diagnosis (conclusion 
 | notify_webhook_url | Post-diagnosis notification callback URL (http(s), e.g. ITSM/UMPS webhook; leave empty to disable pushes) |
 | notify_webhook_token | Notification callback Bearer token (stored encrypted, displayed masked; leave empty to omit the auth header) |
 | event_ingest_token | X-Ingest-Token auth token for the event ingest API (stored encrypted, displayed masked; leave empty to allow unauthenticated pushes) |
+| llm_local_base_url / llm_local_model / llm_local_api_key | Local LLM OpenAI-compatible access (Ollama / vLLM): Base URL + model name + API key (Ollama/vLLM usually anonymous when left empty; stored encrypted, displayed masked; belongs to the "Hybrid LLM Routing" group) |
+| llm_routing_policy | Hybrid LLM routing policy: auto (default, three-dimensional decision by sensitivity / alert severity / service tier) / local_only (all local) / remote_only (all remote; sensitive data is still forced local) |
+| llm_remote_approval_id | Remote LLM data-egress compliance approval ID (when empty, remote routing is rejected — local or deterministic degradation only) |
+| data_masking_enabled | Inbound data masking toggle (default true: alert text is masked before persistence, raw content is never stored; masking also drives the LLM routing sensitivity dimension) |
 
 - Changes take effect immediately and write a `config_update` audit record. Each Agent group offers a "Test connectivity" button (`POST /api/v1/console/configs/llm-test?agent=diagnose|kb_governance|oncall`) that returns the resolved model/timeout/provider and `access_source` (agent=independent config in effect / global=inherited), and API keys are never echoed.
 
@@ -160,6 +164,24 @@ curl -X POST http://<console-host>:8000/api/v1/ingest/alerts \
 - The "Integration & Notification" group offers a "Test connectivity" button (`POST /api/v1/console/notify/test`, sys_admin): it sends a sample payload to the callback URL and returns the status code/latency, for pre-go-live verification of external reachability.
 
 For the field mapping table and UMPS/ITSM mapping suggestions (operator view), see `docs/OPERATIONS_DEPLOYMENT_GUIDE.en.md` §23.
+
+### Hybrid LLM Routing & Compliance Audit
+
+Diagnosis (single-round one-click diagnosis and the deep-diagnosis Agent) performs a three-dimensional routing decision before every LLM call: **data sensitivity → alert severity → service tier**.
+
+- Sensitive data (including recognition of mask placeholders) is always forced to the local LLM and **never sent remote**; when the local LLM is not deployed, diagnosis automatically degrades to a "deterministic conclusion" (reusing knowledge-base candidates, root cause prefixed "Sensitive data stays on-premises · deterministic conclusion"), again without a remote fallback.
+- Under the `auto` policy, remote routing requires all of: non-sensitive + non-critical + non-production environment (CMDB) + remote approval ID configured (`llm_remote_approval_id`); any unmet condition conservatively chooses local. When `llm_remote_approval_id` is empty, remote routing is rejected outright (red-line double safeguard).
+- The local LLM connects via OpenAI-compatible endpoints (Ollama / vLLM); fill in the Base URL / model name / API key in the config center "Hybrid LLM Routing" group (deployment examples: `docs/OPERATIONS_DEPLOYMENT_GUIDE.en.md` §24).
+- Every routing decision and LLM call is written to the **compliance audit hash chain** (actions `llm_route_decision` / `llm_invocation`, chain hashes stored in the audit record's `after_json.chain`) and can be filtered by action in the audit log; sys_admin can call the tamper-verification endpoint:
+
+```bash
+curl http://<console-host>:8000/api/v1/console/audit-logs/chain-verify -H "Authorization: Bearer <token>"
+# Expected: {"ok":true,"total":N,"head_hash":"...","broken_id":null}
+```
+
+### Data Classification & Masking
+
+The `data_masking_enabled` toggle (enabled by default) in the "Data Classification & Masking" group controls inbound masking on the event ingest API: when enabled, externally pushed alert text is masked before persistence for ID cards / phone numbers / bank card numbers / private IPs / key assignments / Bearer tokens / emails / long tokens (e.g. `138****5678`, `10.1.2.x`), and **raw content is never stored**; mask placeholders preserve a recognizable format so routing sensitivity detection is unaffected. Public IPs and hostnames are preserved to satisfy diagnosis correlation needs. The `event_ingest` audit records `data_masking_enabled` / `masked` / `sensitivity_categories` for traceability.
 
 ### Knowledge health risk closed loop (kb_admin and above)
 

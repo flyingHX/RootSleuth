@@ -661,3 +661,95 @@ Connectivity verification (recommended before go-live):
 curl -X POST http://127.0.0.1:8000/api/v1/console/notify/test -H "Authorization: Bearer <token>"
 # Expected: {"ok":true,"status_code":200,"latency_ms":32,"error":null,"url":"...","sample_payload":{...}}
 ```
+
+## 24. Hybrid LLM routing & compliance audit (review adoption)
+
+The diagnosis chain (single-round one-click diagnosis + deep-diagnosis Agent and its degradation paths) performs a three-dimensional routing decision before every LLM call (`app/backend/services/llm_routing.py`); sensitive data is never sent to a remote LLM.
+
+### 24.1 Three-dimensional routing decision
+
+| Dimension | Basis | Decision |
+|-----------|-------|----------|
+| Data sensitivity | detect_sensitivity: key assignments / Bearer tokens / private IPs (including masked placeholder `a.b.c.x`) / phone numbers / ID cards / long digit runs / emails / long tokens / mask placeholders | Sensitive → forced local |
+| Alert severity | events.severity | critical → conservative local handling |
+| Service tier | CMDB asset environment (prod / production) | Production → conservative local handling |
+
+- Routing policy `llm_routing_policy`:
+  - `auto` (default): non-sensitive + non-critical + non-production + remote approval ID configured → remote; any condition unmet → local;
+  - `local_only`: always local; when local LLM is not deployed, degrade to a deterministic conclusion;
+  - `remote_only`: always remote, but sensitive data is still forced local (the red line takes precedence).
+- Red-line double safeguard: when `llm_remote_approval_id` is empty, remote routing is rejected under any policy and falls back to local.
+- Sensitive data + local LLM not configured: all LLM calls are skipped and a deterministic conclusion is built directly from knowledge-base candidates (root cause prefixed "Sensitive data stays on-premises · deterministic conclusion", `degraded_reason=sensitive_local_unavailable_deterministic`); remote fallback never happens.
+
+### 24.2 Local LLM access (Ollama / vLLM, OpenAI-compatible endpoints)
+
+Config center "Hybrid LLM Routing" group (sys_admin):
+
+| Key | Description |
+|-----|-------------|
+| llm_local_base_url | OpenAI-compatible local gateway address (Ollama: `http://ollama:11434/v1`; vLLM: `http://vllm:8000/v1`) |
+| llm_local_model | Local model name (Ollama e.g. `qwen2.5:14b`, `deepseek-r1:14b`; vLLM e.g. `Qwen2.5-14B-Instruct`) |
+| llm_local_api_key | Local gateway API key (Ollama/vLLM usually allow anonymous access; stored encrypted, displayed masked) |
+| llm_routing_policy | auto / local_only / remote_only (default auto) |
+| llm_remote_approval_id | Remote data-egress compliance approval ID (when empty, remote routing is rejected) |
+
+Ollama deployment & smoke test:
+
+```bash
+docker run -d --name ollama -p 11434:11434 ollama/ollama
+docker exec ollama ollama pull qwen2.5:14b
+# OpenAI-compatible endpoint smoke test
+curl http://<ollama-host>:11434/v1/chat/completions -H "Content-Type: application/json" \
+  -d '{"model":"qwen2.5:14b","messages":[{"role":"user","content":"ping"}]}'
+```
+
+vLLM deployment & smoke test:
+
+```bash
+pip install vllm
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-14B-Instruct --port 8000
+curl http://<vllm-host>:8000/v1/models
+```
+
+### 24.3 Compliance audit hash chain & tamper verification
+
+- The two audit record types — routing decisions (`llm_route_decision`) and LLM calls (`llm_invocation`) — form a hash chain: the existing `audit_logs` table is reused (chain fields stored in `after_json.chain` as `prev_hash` / `hash`, **no table schema change**), with `hash = sha256(prev_hash | actor | action | target_type | target_id | normalized after JSON)`; audit content records only sensitivity category labels and routing metadata, never raw alert text.
+- Tamper verification (sys_admin): if any record's `after_json` is tampered with, the whole chain fails verification and the first broken link is pinpointed.
+
+```bash
+curl http://127.0.0.1:8000/api/v1/console/audit-logs/chain-verify -H "Authorization: Bearer <token>"
+# Expected: {"ok":true,"total":N,"head_hash":"...","broken_id":null}
+```
+
+### 24.4 Routing behavior verification
+
+```bash
+# Sensitive alert ingestion (card number / phone number) → masked persistence → diagnosis triggers a routing decision
+curl -X POST http://127.0.0.1:8000/api/v1/ingest/alerts -H "Content-Type: application/json" \
+  -d '{"source":"webhook","event_id":"E2E-ROUTE-1","service_name":"payments","error_type":"payment","severity":"warning","raw_message":"payment declined card 6222020200112233 phone 13812345678"}'
+# Query routing-decision audit records (logged-in session required)
+curl "http://127.0.0.1:8000/api/v1/console/audit-logs?action=llm_route_decision" -H "Authorization: Bearer <token>"
+# Expected: after.route=local, after.sensitive=true, reasons include "never sent remote"
+```
+
+## 25. Data classification & inbound masking (review adoption)
+
+The event ingest API (`POST /api/v1/ingest/alerts`) enables inbound masking by default (`data_masking_enabled=true`): raw alert text is masked via `mask_alert_text` before persistence, and **raw content is never stored**.
+
+| Category | Example | Masked |
+|----------|---------|--------|
+| ID card | 11010119900307851X | 110****851X |
+| Phone number | 13812345678 | 138****5678 |
+| Bank card / long digits (15~19) | 6222020200112233 | 6222****2233 |
+| Private IP | 10.1.2.3 / 192.168.1.100 | 10.1.2.x / 192.168.1.x |
+| Key assignment | password=Sup3rSecret | password=*** |
+| Bearer token | Bearer abc.def-ghi | Bearer *** |
+| Email | user@example.com | ***@*** |
+| Long token (≥32 chars) | eyJhbGciOiJSUzI1NiJ9... | *** |
+
+- Mask placeholders preserve a recognizable format, and `detect_sensitivity` can re-classify persisted text to drive LLM routing (§24.1);
+- Public IPs and hostnames are preserved (needed for diagnosis and CMDB correlation);
+- Only explicitly setting `data_masking_enabled=false` stores raw text (an explicit deployer choice; the `event_ingest` audit records `data_masking_enabled=false` for traceability);
+- Verification: after pushing an alert containing sensitive fields, query the event detail — `raw_log` should only show mask placeholders.
+
+Dedicated regression: `app/backend/tests/test_llm_routing_compliance.py` (15 cases: routing matrix / sensitive-data non-egress / per-category masking / hash-chain tamper detection / ingest integration / route passthrough).

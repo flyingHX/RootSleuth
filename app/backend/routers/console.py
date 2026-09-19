@@ -41,6 +41,7 @@ from services.console_common import (
     set_config,
     validate_config_value,
     write_audit,
+    verify_compliance_chain,
 )
 
 logger = logging.getLogger(__name__)
@@ -816,6 +817,28 @@ async def list_audit_logs(
             }
         )
     return {"items": items, "total": total, "skip": skip, "limit": limit}
+
+
+@router.get("/audit-logs/chain-verify")
+async def verify_audit_chain(
+    current_user: UserResponse = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """合规审计哈希链完整性校验（评审采纳项）：逐条重算 llm_route_decision /
+    llm_invocation 链哈希并比对 prev_hash 连接，返回 ok/total/head_hash/broken_id，
+    供前端一键核验 LLM 调用合规证据链是否被篡改；校验动作本身写入审计。
+    """
+    await require_role(db, current_user, "sys_admin")
+    result = await verify_compliance_chain(db)
+    await write_audit(
+        db,
+        actor=current_user.email or current_user.id,
+        action="audit_chain_verify",
+        target_type="audit_logs",
+        target_id="compliance_chain",
+        after={"ok": bool(result["ok"]), "total": result["total"], "broken_id": result["broken_id"]},
+    )
+    return result
 
 
 @router.get("/configs")
